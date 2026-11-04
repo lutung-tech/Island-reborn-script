@@ -1,4 +1,4 @@
--- AUTO FISHING - ISLAND REBORN (v10: Precise Attribute & Tug Detection)
+-- AUTO FISHING - ISLAND REBORN (v12: Fix Stuck After Reel & Force Recast)
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
@@ -7,11 +7,12 @@ local CoreGui = game:GetService("CoreGui")
 local player = Players.LocalPlayer
 
 -- ===== Config =====
-local clickDelay = 0.15        -- Lama tombol ditahan
-local castTimeout = 10         -- Toleransi waktu lempar
-local biteTimeout = 45         -- Maksimal tunggu ikan menyambar
-local settleDelay = 3.0        -- Jeda awal agar kail tenang
-local postReelWait = 2.0       -- Jeda setelah narik ikan
+local clickDelay = 0.15        -- Lama tombol ditahan saat klik
+local castTimeout = 10         -- Toleransi waktu lempar kail
+local biteTimeout = 45         -- Maksimal tunggu ikan
+local settleDelay = 3.5        -- Jeda awal agar kail stabil di air
+local moveThreshold = 4.0      -- Jarak geser minimal untuk deteksi sambaran
+local postReelWait = 2.0       -- Jeda setelah narik ikan sebelum lempar lagi
 
 -- ===== Parent GUI =====
 local function getGuiParent()
@@ -57,7 +58,7 @@ corner.Parent = frame
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 30)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH v10"
+title.Text = "ISLAND AUTO FISH v12"
 title.TextColor3 = Color3.new(1, 1, 1)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
@@ -140,12 +141,10 @@ local function tapScreen()
     end)
 end
 
--- Cari folder bobber pemain
 local function getBobberFolder()
     return workspace:FindFirstChild("FishingBobbers")
 end
 
--- Cari objek bobber aktif di workspace
 local function findMyBobber()
     local folder = getBobberFolder()
     if not folder then return nil end
@@ -164,7 +163,7 @@ local function fishingLoop(myRun)
         status.Text = "Status: Melempar Kail..."
         tapScreen()
         
-        -- Tahap 1: Tunggu sampai bobber/kail muncul di workspace
+        -- Tahap 1: Tunggu kail muncul (diberi batas waktu agar tidak nge-lock selamanya)
         status.Text = "Status: Menunggu Kail Muncul..."
         local bobber = nil
         local startWait = os.clock()
@@ -177,57 +176,54 @@ local function fishingLoop(myRun)
         
         if not isActive(myRun) then break end
         
+        -- Walaupun bobber tidak terdeteksi secara spesifik, tetap lanjut ke fase tunggu ikan agar tidak macet
         if not bobber then
-            status.Text = "Status: Kail Gagal, Mengulang..."
-            task.wait(1)
-            continue
-        end
-        
-        -- Tahap 2: Settle Delay (Agar kail stabil di air & lemparan selesai)
-        status.Text = "Status: Menunggu Kail Stabil..."
-        local settleStart = os.clock()
-        while isActive(myRun) and (os.clock() - settleStart < settleDelay) do
-            task.wait(0.05)
+            status.Text = "Status: Memantau Ikan Langsung..."
+        else
+            -- Tahap 2: Settle Delay (Kail dibiarkan stabil di air)
+            status.Text = "Status: Menunggu Kail Stabil..."
+            local settleStart = os.clock()
+            while isActive(myRun) and (os.clock() - settleStart < settleDelay) do
+                task.wait(0.05)
+            end
         end
         
         if not isActive(myRun) then break end
         
         status.Text = "Status: Menunggu Ikan Menyambar..."
         
-        -- Tahap 3: Deteksi Sambaran Akurat (Lewat Attribute 'Tug' atau Pergerakan Signifikan)
+        -- Tahap 3: Deteksi Sambaran
         local fishBited = false
         local connection = nil
         local initialPos = nil
         
-        if bobber:IsA("BasePart") then
-            initialPos = bobber.Position
-        elseif bobber:IsA("Model") and bobber.PrimaryPart then
-            initialPos = bobber.PrimaryPart.Position
+        if bobber and bobber.Parent then
+            if bobber:IsA("BasePart") then
+                initialPos = bobber.Position
+            elseif bobber:IsA("Model") and bobber.PrimaryPart then
+                initialPos = bobber.PrimaryPart.Position
+            end
+            
+            connection = bobber.AttributeChanged:Connect(function(attrName)
+                if attrName:lower() == "tug" then
+                    local val = bobber:GetAttribute(attrName)
+                    if val == true or (typeof(val) == "number" and val > 0) then
+                        fishBited = true
+                    end
+                end
+            end)
         end
         
-        -- Pantau perubahan atribut 'Tug' jika ada dari game
-        connection = bobber.AttributeChanged:Connect(function(attrName)
-            if attrName:lower() == "tug" then
-                local val = bobber:GetAttribute(attrName)
-                if val == true or (typeof(val) == "number" and val > 0) then
-                    fishBited = true
-                end
-            end
-        end)
-        
-        -- Loop pemantauan sambaran (Cek atribut dan pergeseran posisi bobber akibat ditarik ikan)
         local biteStart = os.clock()
         while isActive(myRun) and not fishBited and (os.clock() - biteStart < biteTimeout) do
-            if not bobber.Parent then break end
+            if bobber and not bobber.Parent then break end
             
-            -- Cek apakah atribut Tug bernilai true secara langsung
-            if bobber:GetAttribute("Tug") == true then
+            if bobber and bobber:GetAttribute("Tug") == true then
                 fishBited = true
                 break
             end
             
-            -- Cek pergeseran posisi bobber yang drastis (tanda ikan menarik kail)
-            if initialPos then
+            if initialPos and bobber and bobber.Parent then
                 local currentPos = nil
                 if bobber:IsA("BasePart") then
                     currentPos = bobber.Position
@@ -235,7 +231,7 @@ local function fishingLoop(myRun)
                     currentPos = bobber.PrimaryPart.Position
                 end
                 
-                if currentPos and (currentPos - initialPos).Magnitude > 2.0 then
+                if currentPos and (currentPos - initialPos).Magnitude > moveThreshold then
                     fishBited = true
                     break
                 end
@@ -248,16 +244,15 @@ local function fishingLoop(myRun)
         
         if not isActive(myRun) then break end
         
-        -- Tahap 4: Eksekusi Narik Ikan
+        -- Tahap 4: Eksekusi Tarik Ikan & Pastikan Auto Recast Jalan Terus
         if fishBited then
             status.Text = "Status: STRIKE! Narik Ikan..."
-            tapScreen()
-            task.wait(postReelWait)
         else
-            status.Text = "Status: Timeout, Mengulang..."
-            tapScreen()
-            task.wait(1.5)
+            status.Text = "Status: Timeout, Menarik Kail..."
         end
+        
+        tapScreen() -- Tarik kail
+        task.wait(postReelWait) -- Jeda animasi selesai, lalu loop akan mengulang melempar kail otomatis
     end
     
     if runId == myRun then
@@ -270,6 +265,7 @@ startButton.MouseButton1Click:Connect(function()
     if running then return end
     runId = runId + 1
     running = true
+    status.Text = "Status: Starting..."
     task.spawn(fishingLoop, runId)
 end)
 
