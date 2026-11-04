@@ -1,111 +1,51 @@
--- AUTO FARM SLIME TURBO (Fast Attack & No Damage)
+-- Roblox Islands - Simple Auto Farm Slime Example
 local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
 local Workspace = game:GetService("Workspace")
-local VIM = game:GetService("VirtualInputManager")
 
-local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+local autoFarm = true -- Ubah ke false untuk mematikan
 
--- ===== Config Turbo =====
-local hoverHeight = 8      -- Tinggi melayang agar aman dari damage slime
-local attackSpeed = 0.05   -- Jeda super cepat antar serangan (turbo)
-
--- Hapus GUI lama jika ada
-pcall(function()
-    local old = playerGui:FindFirstChild("SlimeTurboFarm")
-    if old then old:Destroy() end
-end)
-
-local farming = false
-local runId = 0
-
--- ===== GUI Sederhana =====
-local gui = Instance.new("ScreenGui")
-gui.Name = "SlimeTurboFarm"
-gui.ResetOnSpawn = false
-gui.Parent = playerGui
-
-local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(200, 100)
-frame.Position = UDim2.new(0.5, -100, 0.3, -50)
-frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-frame.Parent = gui
-
-local corner = Instance.new("UICorner")
-corner.Parent = frame
-
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 30)
-title.BackgroundTransparency = 1
-title.Text = "TURBO SLIME FARM"
-title.TextColor3 = Color3.new(1, 1, 1)
-title.Font = Enum.Font.GothamBold
-title.TextSize = 13
-title.Parent = frame
-
-local status = Instance.new("TextLabel")
-status.Position = UDim2.new(0, 10, 0, 35)
-status.Size = UDim2.new(1, -20, 0, 20)
-status.BackgroundTransparency = 1
-status.Text = "Status: OFF"
-status.TextColor3 = Color3.fromRGB(200, 200, 200)
-status.TextSize = 11
-status.Parent = frame
-
-local toggleBtn = Instance.new("TextButton")
-toggleBtn.Position = UDim2.new(0, 10, 0, 60)
-toggleBtn.Size = UDim2.new(1, -20, 0, 30)
-toggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
-toggleBtn.Text = "START TURBO"
-toggleBtn.TextColor3 = Color3.new(1, 1, 1)
-toggleBtn.Font = Enum.Font.GothamBold
-toggleBtn.TextSize = 12
-toggleBtn.Parent = frame
-
-local btnCorner = Instance.new("UICorner")
-btnCorner.Parent = toggleBtn
-
--- Fungsi mencari Slime terdekat
-local function findNearestSlime()
-    local char = player.Character
-    if not char or not char:FindFirstChild("HumanoidRootPart") then return nil end
-    local hrp = char.HumanoidRootPart
+local function getClosestSlime()
+    local closestSlime = nil
+    local shortestDistance = math.huge
     
-    local nearest = nil
-    local shortestDist = math.huge
+    -- Mencari folder Mobs / Wild Mobs di Workspace
+    local mobsFolder = Workspace:FindFirstChild("WildMobs") or Workspace:FindFirstChild("Mobs")
     
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj ~= char then
-            local name = obj.Name:lower()
-            if name:find("slime") then
-                local hum = obj:FindFirstChildOfClass("Humanoid")
-                local part = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
-                
-                if hum and hum.Health > 0 and part then
-                    local dist = (part.Position - hrp.Position).Magnitude
-                    if dist < shortestDist then
-                        shortestDist = dist
-                        nearest = part
+    if mobsFolder then
+        for _, mob in pairs(mobsFolder:GetChildren()) do
+            if string.find(string.lower(mob.Name), "slime") and mob:FindFirstChild("HumanoidRootPart") and mob:FindFirstChild("Humanoid") then
+                if mob.Humanoid.Health > 0 then
+                    local distance = (LocalPlayer.Character.HumanoidRootPart.Position - mob.HumanoidRootPart.Position).Magnitude
+                    if distance < shortestDistance then
+                        shortestDistance = distance
+                        closestSlime = mob
                     end
                 end
             end
         end
     end
-    return nearest
+    return closestSlime
 end
 
--- Fungsi Klik Cepat (Turbo Tap)
-local function turboClick()
-    local cam = Workspace.CurrentCamera
-    local vs = cam and cam.ViewportSize or Vector2.new(800, 600)
-    local tx, ty = vs.X * 0.5, vs.Y * 0.5
-    
-    pcall(function()
-        VIM:SendMouseButtonEvent(tx, ty, 0, true, game, 0)
-        VIM:SendMouseButtonEvent(tx, ty, 0, false, game, 0)
-    end)
-end
-
--- Loop Turbo Farm
-local function startTurbo(myId)
-    while farming and runId ==
+-- Main Loop Auto Farm
+task.spawn(function()
+    while autoFarm do
+        task.wait(0.1)
+        pcall(function()
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                local target = getClosestSlime()
+                if target then
+                    -- Teleport di atas slime agar aman
+                    LocalPlayer.Character.HumanoidRootPart.CFrame = target.HumanoidRootPart.CFrame * CFrame.new(0, 5, 0)
+                    
+                    -- Mengayunkan/mengaktifkan senjata yang dipegang
+                    local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+                    if tool then
+                        tool:Activate()
+                    end
+                end
+            end
+        end)
+    end
+end)
