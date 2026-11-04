@@ -1,4 +1,4 @@
--- AUTO FISHING - ISLAND REBORN (v25: Tool & Attribute Change Detector)
+-- AUTO FISHING - ISLAND REBORN (v28: Bobber Water-Level Tracker)
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
@@ -8,7 +8,8 @@ local playerGui = player:WaitForChild("PlayerGui")
 
 -- ===== Config =====
 local clickDelay = 0.15        
-local maxWaitTime = 25         -- Batas maksimal tunggu sambaran sebelum lempar ulang
+local sinkLimit = 0.5          -- Batas seberapa jauh pelampung turun ke bawah (dalam stud) untuk dianggap ditarik ikan
+local maxWaitTime = 25         -- Batas maksimal nunggu ikan
 local postReelWait = 1.0       
 
 -- Hapus GUI lama
@@ -25,7 +26,7 @@ local function isActive(id)
     return running and runId == id
 end
 
--- ===== GUI v25 =====
+-- ===== GUI v28 =====
 local gui = Instance.new("ScreenGui")
 gui.Name = "IslandAutoFish"
 gui.ResetOnSpawn = false
@@ -46,7 +47,7 @@ corner.Parent = frame
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 35)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH v25"
+title.Text = "ISLAND AUTO FISH v28"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
@@ -140,61 +141,73 @@ local function tapScreen()
     end)
 end
 
--- Mendapatkan tool pancing yang sedang dipegang pemain
-local function getFishingRod()
-    local char = player.Character
-    if not char then return nil end
-    return char:FindFirstChildOfClass("Tool")
+-- Mencari objek pelampung di workspace
+local function findBobber()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local name = obj.Name:lower()
+            if name:find("bobber") or name:find("float") or name:find("hook") then
+                return obj
+            end
+        end
+    end
+    return nil
 end
 
--- ===== Loop Utama Deteksi Perubahan =====
+-- ===== Loop Utama v28 =====
 local function fishingLoop(myRun)
     while isActive(myRun) do
         status.Text = "Status: Melempar Kail..."
         tapScreen() -- Lempar pancingan
         
-        status.Text = "Status: Memantau Perubahan Game..."
-        local waitStart = os.clock()
-        local fishBited = false
-        local toolConn = nil
+        status.Text = "Status: Mencari Pelampung..."
+        local bobber = nil
+        local startFind = os.clock()
         
-        local rod = getFishingRod()
-        if rod then
-            -- Pantau jika ada Attribute yang berubah pada tool pancing (seperti sinyal 'Tug', 'Hooked', dll)
-            toolConn = rod.AttributeChanged:Connect(function(attrName)
-                local val = rod:GetAttribute(attrName)
-                -- Jika ada perubahan atribut yang bernilai true atau angka aktif
-                if val == true or (typeof(val) == "number" and val > 0) then
-                    fishBited = true
-                end
-            end)
-            
-            -- Pantau juga jika ada perubahan nilai properti pada tool
-            table.insert(uiConnections, rod.Changed:Connect(function(prop)
-                if prop == "Parent" and rod.Parent == nil then
-                    fishBited = true
-                end
-            end))
+        -- Tunggu sampai pelampung muncul di air
+        while isActive(myRun) and (os.clock() - startFind < 6) do
+            bobber = findBobber()
+            if bobber then break end
+            task.wait(0.1)
         end
-        
-        -- Tunggu sampai ikan menyambar atau terkena timeout
-        while isActive(myRun) and not fishBited and (os.clock() - waitStart < maxWaitTime) do
-            -- Cek cadangan: jika tool pancing tiba-tiba lepas atau berubah status
-            local currentRod = getFishingRod()
-            if not currentRod or currentRod ~= rod then
-                fishBited = true
-                break
-            end
-            task.wait(0.05)
-        end
-        
-        if toolConn then toolConn:Disconnect() end
         
         if not isActive(myRun) then break end
         
-        status.Text = "Status: STRIKE! Menarik Kail..."
-        tapScreen() -- Tarik pancingan
+        if not bobber then
+            status.Text = "Status: Pelampung Hilang, Ulang..."
+            task.wait(1)
+            continue
+        end
         
+        status.Text = "Status: Memantau Pelampung..."
+        local biteStart = os.clock()
+        local hooked = false
+        
+        -- Beri jeda 1 detik agar pelampung stabil di permukaan air
+        task.wait(1.0)
+        if not bobber.Parent then continue end
+        local initialY = bobber.Position.Y
+        
+        -- Pantau penurunan posisi Y secara real-time
+        while isActive(myRun) and bobber.Parent and (os.clock() - biteStart < maxWaitTime) do
+            local currentY = bobber.Position.Y
+            -- Jika pelampung turun ke bawah melewati batas sinkLimit
+            if (initialY - currentY) >= sinkLimit then
+                hooked = true
+                break
+            end
+            task.wait(0.03)
+        end
+        
+        if not isActive(myRun) then break end
+        
+        if hooked then
+            status.Text = "Status: STRIKE! Pelampung Tarik!"
+        else
+            status.Text = "Status: Timeout, Menarik Kail..."
+        end
+        
+        tapScreen() -- Tarik pancingan
         task.wait(postReelWait)
     end
     
