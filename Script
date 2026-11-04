@@ -1,4 +1,4 @@
--- AUTO FISHING - ISLAND REBORN (v19: Clean UI & Stable Auto Timer)
+-- AUTO FISHING - ISLAND REBORN (v20: Fixed UI Layout & Clean Scale)
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
@@ -6,12 +6,12 @@ local VIM = game:GetService("VirtualInputManager")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- ===== Config Waktu (Bisa disesuaikan) =====
-local clickDelay = 0.15        -- Lama tombol layar ditahan saat klik
-local fishingDuration = 4.8    -- Durasi detik dari kail dilempar sampai ikan menyambar
-local postReelWait = 1.5       -- Jeda setelah narik ikan sebelum melempar kembali
+-- ===== Config Waktu =====
+local clickDelay = 0.15        
+local fishingDuration = 4.8    
+local postReelWait = 1.5       
 
--- Hapus GUI lama agar bersih dari error tampilan
+-- Hapus GUI lama agar bersih dari error
 pcall(function()
     local old = playerGui:FindFirstChild("IslandAutoFish")
     if old then old:Destroy() end
@@ -25,7 +25,7 @@ local function isActive(id)
     return running and runId == id
 end
 
--- ===== GUI Rapi & Bebas Garis Rusak =====
+-- ===== GUI Responsive =====
 local gui = Instance.new("ScreenGui")
 gui.Name = "IslandAutoFish"
 gui.ResetOnSpawn = false
@@ -33,55 +33,65 @@ gui.IgnoreGuiInset = true
 gui.Parent = playerGui
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(220, 125)
-frame.Position = UDim2.new(0.5, -110, 0.35, -62)
-frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+-- Menggunakan Scale agar ukurannya pas menyesuaikan layar HP
+frame.Size = UDim2.new(0, 240, 0, 130)
+frame.Position = UDim2.new(0.5, -120, 0.3, -65)
+frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+frame.BorderSizePixel = 0
 frame.Parent = gui
 
 local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 8)
+corner.CornerRadius = UDim.new(0, 10)
 corner.Parent = frame
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 30)
+title.Size = UDim2.new(1, 0, 0, 35)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH v19"
-title.TextColor3 = Color3.new(1, 1, 1)
-title.TextSize = 15
+title.Text = "ISLAND AUTO FISH v20"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 14
 title.Font = Enum.Font.GothamBold
 title.Parent = frame
 
 local status = Instance.new("TextLabel")
-status.Position = UDim2.fromOffset(10, 32)
+status.Position = UDim2.new(0, 10, 0, 38)
 status.Size = UDim2.new(1, -20, 0, 25)
 status.BackgroundTransparency = 1
 status.Text = "Status: OFF"
-status.TextColor3 = Color3.fromRGB(200, 200, 200)
+status.TextColor3 = Color3.fromRGB(180, 180, 180)
 status.TextSize = 12
 status.Font = Enum.Font.Gotham
 status.Parent = frame
 
 local startButton = Instance.new("TextButton")
-startButton.Position = UDim2.fromOffset(10, 68)
-startButton.Size = UDim2.fromOffset(95, 42)
+startButton.Position = UDim2.new(0, 10, 0, 75)
+startButton.Size = UDim2.new(0.5, -15, 0, 40)
 startButton.Text = "START"
-startButton.BackgroundColor3 = Color3.fromRGB(30, 150, 70)
-startButton.TextColor3 = Color3.new(1, 1, 1)
+startButton.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
+startButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 startButton.Font = Enum.Font.GothamBold
-startButton.TextSize = 14
+startButton.TextSize = 13
 startButton.Parent = frame
 
+local startCorner = Instance.new("UICorner")
+startCorner.CornerRadius = UDim.new(0, 6)
+startCorner.Parent = startButton
+
 local stopButton = Instance.new("TextButton")
-stopButton.Position = UDim2.fromOffset(115, 68)
-stopButton.Size = UDim2.fromOffset(95, 42)
+stopButton.Position = UDim2.new(0.5, 5, 0, 75)
+stopButton.Size = UDim2.new(0.5, -15, 0, 40)
 stopButton.Text = "STOP"
-stopButton.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
-stopButton.TextColor3 = Color3.new(1, 1, 1)
+stopButton.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+stopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 stopButton.Font = Enum.Font.GothamBold
-stopButton.TextSize = 14
+stopButton.TextSize = 13
 stopButton.Parent = frame
 
--- Dragging GUI supaya bisa digeser di HP
+local stopCorner = Instance.new("UICorner")
+stopCorner.CornerRadius = UDim.new(0, 6)
+stopCorner.Parent = stopButton
+
+-- Dragging GUI supaya bisa digeser dengan mudah di layar HP
 do
     local dragging, dragStart, startPos
     title.InputBegan:Connect(function(input)
