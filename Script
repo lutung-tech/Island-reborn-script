@@ -1,4 +1,4 @@
--- AUTO FISHING - ISLAND REBORN (v15: Anti-Fast Pull & Delayed Strike Confirmation)
+-- AUTO FISHING - ISLAND REBORN (v16: Stable Timer & Auto Recast)
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
@@ -6,16 +6,12 @@ local VIM = game:GetService("VirtualInputManager")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- ===== Config (Bisa disesuaikan) =====
-local clickDelay = 0.15        -- Lama tombol ditahan saat klik
-local castTimeout = 10         -- Toleransi waktu tunggu kail muncul
-local biteTimeout = 45         -- Maksimal tunggu ikan menyambar
-local settleDelay = 4.0        -- Jeda awal agar kail stabil di air (diperlama)
-local moveThreshold = 6.0      -- [DIUPERKETAT] Jarak geser minimal yang ekstrem supaya tidak gampang tertarik
-local confirmationDelay = 0.4  -- Waktu tunggu konfirmasi sambaran akhir agar tidak terlalu cepat
-local postReelWait = 2.0       -- Jeda setelah narik ikan sebelum lempar lagi
+-- ===== Config (Bisa diatur waktunya) =====
+local clickDelay = 0.15        -- Lama tombol layar ditahan saat klik
+local fishingDuration = 4.5    -- Waktu tunggu dari lempar sampai ikan menyambar (sesuaikan jika kurang pas)
+local postReelWait = 1.5       -- Jeda setelah narik ikan sebelum melempar kembali
 
--- Hapus GUI lama jika ada
+-- Hapus GUI lama agar tidak menumpuk
 pcall(function()
     local old = playerGui:FindFirstChild("IslandAutoFish")
     if old then old:Destroy() end
@@ -29,7 +25,7 @@ local function isActive(id)
     return running and runId == id
 end
 
--- ===== GUI =====
+-- ===== GUI Sederhana =====
 local gui = Instance.new("ScreenGui")
 gui.Name = "IslandAutoFish"
 gui.ResetOnSpawn = false
@@ -49,7 +45,7 @@ corner.Parent = frame
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 30)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH v15"
+title.Text = "ISLAND AUTO FISH v16"
 title.TextColor3 = Color3.new(1, 1, 1)
 title.TextSize = 15
 title.Font = Enum.Font.GothamBold
@@ -85,7 +81,7 @@ stopButton.Font = Enum.Font.GothamBold
 stopButton.TextSize = 14
 stopButton.Parent = frame
 
--- Dragging GUI
+-- Dragging GUI supaya bisa digeser di layar HP
 do
     local dragging, dragStart, startPos
     title.InputBegan:Connect(function(input)
@@ -110,7 +106,7 @@ gui.Destroying:Connect(function()
     for _, c in ipairs(uiConnections) do c:Disconnect() end
 end)
 
--- ===== Simulator Tap Layar =====
+-- ===== Simulator Tap Layar HP =====
 local function insideFrame(x, y)
     local p, s = frame.AbsolutePosition, frame.AbsoluteSize
     return x >= p.X and x <= p.X + s.X and y >= p.Y and y <= p.Y + s.Y
@@ -134,118 +130,26 @@ local function tapScreen()
     end)
 end
 
-local function getBobberFolder()
-    return workspace:FindFirstChild("FishingBobbers")
-end
-
-local function findMyBobber()
-    local folder = getBobberFolder()
-    if not folder then return nil end
-    
-    for _, obj in ipairs(folder:GetChildren()) do
-        if obj:IsA("BasePart") or obj:IsA("Model") then
-            return obj
-        end
-    end
-    return nil
-end
-
--- ===== Loop Utama Mancing =====
+-- ===== Loop Utama Mancing Berkelanjutan =====
 local function fishingLoop(myRun)
     while isActive(myRun) do
         status.Text = "Status: Melempar Kail..."
         tapScreen()
         
-        status.Text = "Status: Menunggu Kail Muncul..."
-        local bobber = nil
-        local startWait = os.clock()
-        
-        while isActive(myRun) and (os.clock() - startWait < castTimeout) do
-            bobber = findMyBobber()
-            if bobber then break end
-            task.wait(0.1)
-        end
-        
-        if not isActive(myRun) then break end
-        
-        if not bobber then
-            status.Text = "Status: Memantau Ikan Langsung..."
-        else
-            status.Text = "Status: Menunggu Kail Stabil..."
-            local settleStart = os.clock()
-            while isActive(myRun) and (os.clock() - settleStart < settleDelay) do
-                task.wait(0.05)
-            end
-        end
-        
-        if not isActive(myRun) then break end
-        
         status.Text = "Status: Menunggu Ikan Menyambar..."
+        local waitStart = os.clock()
         
-        local fishBited = false
-        local connection = nil
-        local initialPos = nil
-        
-        if bobber and bobber.Parent then
-            if bobber:IsA("BasePart") then
-                initialPos = bobber.Position
-            elseif bobber:IsA("Model") and bobber.PrimaryPart then
-                initialPos = bobber.PrimaryPart.Position
-            end
-            
-            connection = bobber.AttributeChanged:Connect(function(attrName)
-                if attrName:lower() == "tug" then
-                    local val = bobber:GetAttribute(attrName)
-                    -- Hanya anggap sambaran jika nilainya benar-benar kuat/valid
-                    if val == true or (typeof(val) == "number" and val > 1) then
-                        fishBited = true
-                    end
-                end
-            end)
-        end
-        
-        local biteStart = os.clock()
-        while isActive(myRun) and not fishBited and (os.clock() - biteStart < biteTimeout) do
-            if bobber and not bobber.Parent then break end
-            
-            if bobber and bobber:GetAttribute("Tug") == true then
-                fishBited = true
-                break
-            end
-            
-            if initialPos and bobber and bobber.Parent then
-                local currentPos = nil
-                if bobber:IsA("BasePart") then
-                    currentPos = bobber.Position
-                elseif bobber:IsA("Model") and bobber.PrimaryPart then
-                    currentPos = bobber.PrimaryPart.Position
-                end
-                
-                -- Deteksi pergeseran kail dengan batas yang jauh lebih tinggi (moveThreshold = 6.0)
-                if currentPos and (currentPos - initialPos).Magnitude > moveThreshold then
-                    fishBited = true
-                    break
-                end
-            end
-            
+        -- Menunggu durasi waktu mancing tanpa takut tersendat oleh error folder game
+        while isActive(myRun) and (os.clock() - waitStart < fishingDuration) do
             task.wait(0.05)
         end
         
-        if connection then connection:Disconnect() end
-        
         if not isActive(myRun) then break end
         
-        -- Berikan jeda konfirmasi sebentar agar benar-benar pas di gigitan akhir ikan
-        if fishBited then
-            status.Text = "Status: Konfirmasi Sambaran..."
-            task.wait(confirmationDelay)
-            status.Text = "Status: STRIKE! Narik Ikan..."
-        else
-            status.Text = "Status: Timeout, Menarik Kail..."
-        end
+        status.Text = "Status: STRIKE! Narik Kail..."
+        tapScreen() -- Menarik kail saat ikan menyambar
         
-        tapScreen() 
-        task.wait(postReelWait) 
+        task.wait(postReelWait) -- Jeda sebentar sebelum melempar kail lagi secara otomatis
     end
     
     if runId == myRun then
@@ -253,7 +157,7 @@ local function fishingLoop(myRun)
     end
 end
 
--- ===== Tombol =====
+-- ===== Tombol Kontrol =====
 startButton.MouseButton1Click:Connect(function()
     if running then return end
     runId = runId + 1
@@ -262,7 +166,7 @@ startButton.MouseButton1Click:Connect(function()
     task.spawn(fishingLoop, runId)
 end)
 
-stopButton.MouseButton1Click:Connect(function(value)
+stopButton.MouseButton1Click:Connect(function()
     running = false
     runId = runId + 1
     status.Text = "Status: STOPPED"
