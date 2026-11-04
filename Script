@@ -1,29 +1,408 @@
--- Auto Fish Loop untuk Islands Reborn / Game Sejenis
-getgenv().AutoFishing = true
+-- AUTO FISHING - ISLAND REBORN (v6: berbasis event dari server)
+-- Alur: klik = lempar kail -> event splash (kail mendarat) -> event sambaran -> klik sekali -> hasil.
+-- Sinyal didapat dari log RemoteEvent (field "sound"):
+--   fishing_rod_splash        = kail mendarat (ada posisi)
+--   AY3OmfC4erEBAFr5eLlknQJU  = ikan menyambar (posisi sama dengan kail)
+--   fish_caught / fish_escaped = hasil
 
-task.spawn(function()
-    print("[AutoFish] Berjalan...")
-    while getgenv().AutoFishing do
-        pcall(function()
-            local player = game:GetService("Players").LocalPlayer
-            local char = player.Character
-            if char then
-                local tool = char:FindFirstChildOfClass("Tool")
-                if tool then
-                    -- 1. Klik sekali untuk melempar kail
-                    tool:Activate()
-                    
-                    -- 2. Waktu tunggu sampai ikan menyambar (Sesuaikan durasi ini jika kurang pas, misal 3.5 atau 4 detik)
-                    task.wait(7)
-                    
-                    -- 3. Klik sekali lagi untuk menarik ikan ke inventory
-                    tool:Activate()
-                end
-            end
-        end)
-        
-        -- Jeda antar siklus lemparan pancing baru
-        task.wait(1.5)
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local VIM = game:GetService("VirtualInputManager")
+local CoreGui = game:GetService("CoreGui")
+
+local player = Players.LocalPlayer
+
+-- ===== Config =====
+local SOUND_CAST = "fishing_rod_splash"
+local SOUND_BITE = "AY3OmfC4erEBAFr5eLlknQJU"  -- kalau game update dan berhenti reel, cek tulisan "suara:" di GUI
+local SOUND_CAUGHT = "fish_caught"
+local SOUND_ESCAPED = "fish_escaped"
+
+local clickDelay = 0.08     -- lama ketukan ditahan
+local castTimeout = 6       -- tunggu splash setelah lempar
+local waitTimeout = 60      -- tunggu sambaran, lewat ini kail ditarik lalu lempar ulang
+local resultTimeout = 6     -- tunggu hasil (caught/escaped) setelah reel
+local afterDelay = 1.5      -- jeda sebelum lempar berikutnya
+local BITE_RADIUS = 12      -- sambaran harus dekat posisi kail (stud)
+local CAST_MAX_DIST = 150   -- splash harus dekat karakter lu (stud), supaya splash pemain lain diabaikan
+
+-- ===== Parent GUI (aman kalau CoreGui/gethui gagal) =====
+local function getGuiParent()
+    local ok, result = pcall(function()
+        return (gethui and gethui()) or CoreGui
+    end)
+    if ok and result then
+        return result
     end
-    print("[AutoFishing] Berhenti.")
+    return player:WaitForChild("PlayerGui")
+end
+
+local guiParent = getGuiParent()
+
+-- Hapus GUI lama (loop lama ikut berhenti lewat event Destroying di bawah)
+pcall(function()
+    local old = guiParent:FindFirstChild("IslandAutoFish")
+    if old then old:Destroy() end
 end)
+pcall(function()
+    local old = player:WaitForChild("PlayerGui"):FindFirstChild("IslandAutoFish")
+    if old then old:Destroy() end
+end)
+
+local running = false
+local runId = 0 -- supaya loop lama tidak jalan bareng loop baru
+local uiConnections = {}
+
+local function isActive(id)
+    return running and runId == id
+end
+
+-- ===== GUI =====
+local gui = Instance.new("ScreenGui")
+gui.Name = "IslandAutoFish"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+
+local okParent = pcall(function()
+    gui.Parent = guiParent
+end)
+if not okParent or not gui.Parent then
+    gui.Parent = player:WaitForChild("PlayerGui")
+end
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(210, 182)
+frame.Position = UDim2.new(0, 20, 0.5, -91)
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+frame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 8)
+corner.Parent = frame
+
+local function makeLabel(text, y, h, size, color)
+    local l = Instance.new("TextLabel")
+    l.Position = UDim2.fromOffset(5, y)
+    l.Size = UDim2.new(1, -10, 0, h)
+    l.BackgroundTransparency = 1
+    l.Text = text
+    l.TextColor3 = color
+    l.TextSize = size
+    l.TextWrapped = true
+    l.Parent = frame
+    return l
+end
+
+local title = makeLabel("ISLAND AUTO FISH v6", 2, 26, 16, Color3.new(1, 1, 1))
+title.Font = Enum.Font.GothamBold
+title.Active = true
+
+local status = makeLabel("Status: OFF", 30, 24, 12, Color3.fromRGB(220, 220, 220))
+local statsLabel = makeLabel("dapat: 0 | lepas: 0", 54, 18, 12, Color3.fromRGB(150, 220, 150))
+local soundLabel = makeLabel("suara: -", 72, 18, 11, Color3.fromRGB(150, 150, 150))
+
+local function makeButton(text, x, y, w, h, color)
+    local b = Instance.new("TextButton")
+    b.Position = UDim2.fromOffset(x, y)
+    b.Size = UDim2.fromOffset(w, h)
+    b.Text = text
+    b.BackgroundColor3 = color
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Parent = frame
+    return b
+end
+
+local startButton = makeButton("START", 10, 96, 90, 36, Color3.fromRGB(30, 150, 70))
+local stopButton = makeButton("STOP", 110, 96, 90, 36, Color3.fromRGB(170, 45, 45))
+local modeButton = makeButton("MODE: auto", 10, 140, 110, 32, Color3.fromRGB(60, 80, 110))
+local testButton = makeButton("TES KLIK", 130, 140, 70, 32, Color3.fromRGB(110, 90, 40))
+
+-- GUI bisa digeser lewat judulnya
+do
+    local dragging, dragStart, startPos
+
+    title.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+        end
+    end)
+
+    table.insert(uiConnections, UIS.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y
+            )
+        end
+    end))
+
+    table.insert(uiConnections, UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end))
+end
+
+-- Kalau GUI dihapus (mis. script dijalankan ulang), hentikan semuanya
+gui.Destroying:Connect(function()
+    running = false
+    runId += 1
+    for _, c in ipairs(uiConnections) do
+        c:Disconnect()
+    end
+end)
+
+-- ===== Klik =====
+local touchOnly = UIS.TouchEnabled and not UIS.MouseEnabled
+
+local function insideFrame(x, y)
+    local p, s = frame.AbsolutePosition, frame.AbsoluteSize
+    return x >= p.X and x <= p.X + s.X and y >= p.Y and y <= p.Y + s.Y
+end
+
+-- Ketukan tidak boleh jatuh di atas GUI sendiri, kalau iya malah kena tombol
+local function getClickPos()
+    local mouse = UIS:GetMouseLocation()
+    if not touchOnly and not insideFrame(mouse.X, mouse.Y) then
+        return mouse.X, mouse.Y
+    end
+
+    local cam = workspace.CurrentCamera
+    local vs = cam and cam.ViewportSize or Vector2.new(800, 600)
+    local candidates = {
+        Vector2.new(vs.X * 0.5, vs.Y * 0.5),
+        Vector2.new(vs.X * 0.7, vs.Y * 0.5),
+        Vector2.new(vs.X * 0.5, vs.Y * 0.3),
+        Vector2.new(vs.X * 0.3, vs.Y * 0.5),
+        Vector2.new(vs.X * 0.5, vs.Y * 0.7),
+    }
+
+    for _, c in ipairs(candidates) do
+        if not insideFrame(c.X, c.Y) then
+            return c.X, c.Y
+        end
+    end
+
+    return mouse.X, mouse.Y
+end
+
+-- Mode klik (ganti lewat tombol MODE, coba satu per satu pakai TES KLIK):
+--   auto  = touch kalau di HP, mouse kalau di PC
+--   touch = ketuk layar (SendTouchEvent)
+--   mouse = klik mouse (SendMouseButtonEvent)
+--   tool  = langsung aktifkan pancing yang lagi dipegang (Tool:Activate)
+local CLICK_MODES = { "auto", "touch", "mouse", "tool" }
+local clickMode = "auto"
+
+local function sendMouse(x, y)
+    VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    task.wait(clickDelay)
+    VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+end
+
+local function sendTouch(x, y)
+    local touchId = 7
+    VIM:SendTouchEvent(touchId, 0, x, y) -- 0 = jari menyentuh
+    task.wait(clickDelay)
+    VIM:SendTouchEvent(touchId, 2, x, y) -- 2 = jari dilepas
+end
+
+local function activateTool()
+    local char = player.Character
+    local tool = char and char:FindFirstChildOfClass("Tool")
+    if not tool then
+        return false
+    end
+    tool:Activate()
+    task.wait(clickDelay)
+    return true
+end
+
+local function click()
+    local mode = clickMode
+    if mode == "auto" then
+        mode = touchOnly and "touch" or "mouse"
+    end
+
+    if mode == "tool" then
+        if activateTool() then
+            return
+        end
+        mode = touchOnly and "touch" or "mouse" -- pancing tidak dipegang, pakai cara lain
+    end
+
+    local x, y = getClickPos()
+
+    if mode == "touch" then
+        local ok = pcall(sendTouch, x, y)
+        if ok then
+            return
+        end
+    end
+
+    sendMouse(x, y)
+end
+
+-- ===== Sinyal dari server =====
+-- state: idle -> cast (menunggu splash) -> wait (menunggu sambaran) -> reel (menunggu hasil) -> done
+local state = "idle"
+local castPos = nil
+local result = nil
+local caught, escaped = 0, 0
+
+local function nearMe(pos)
+    if not pos then return true end
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return true end
+    return (root.Position - pos).Magnitude <= CAST_MAX_DIST
+end
+
+local function onSound(name, pos)
+    soundLabel.Text = "suara: " .. name
+
+    if not running then return end
+
+    if name == SOUND_CAST and state == "cast" then
+        if not nearMe(pos) then return end
+        castPos = pos
+        state = "wait"
+    elseif name == SOUND_BITE and state == "wait" then
+        if castPos and pos and (pos - castPos).Magnitude > BITE_RADIUS then
+            return -- sambaran di kail pemain lain
+        end
+        state = "reel"
+        status.Text = "Status: SAMBAR! Reel..."
+        task.spawn(click) -- klik langsung dari sini supaya secepat mungkin
+    elseif (name == SOUND_CAUGHT or name == SOUND_ESCAPED) and state == "reel" then
+        result = name
+        state = "done"
+    end
+end
+
+local hooked = {}
+
+local function hook(r)
+    if hooked[r] then return end
+    if not (r:IsA("RemoteEvent") or r.ClassName == "UnreliableRemoteEvent") then return end
+    hooked[r] = true
+
+    table.insert(uiConnections, r.OnClientEvent:Connect(function(data)
+        if type(data) ~= "table" then return end
+
+        local snd = data.sound
+        if type(snd) ~= "string" then return end
+
+        local pos = nil
+        if type(data.directional) == "table" and typeof(data.directional.position) == "Vector3" then
+            pos = data.directional.position
+        end
+
+        onSound(snd, pos)
+    end))
+end
+
+-- Nama event diacak oleh game, jadi semua RemoteEvent dipantau dan disaring lewat isinya
+for _, d in ipairs(game:GetDescendants()) do
+    hook(d)
+end
+table.insert(uiConnections, game.DescendantAdded:Connect(hook))
+
+-- ===== Loop utama =====
+local function waitWhile(id, wanted, timeout)
+    local t = os.clock()
+    while isActive(id) and state == wanted and os.clock() - t < timeout do
+        task.wait(0.03)
+    end
+end
+
+local function fishingLoop(myRun)
+    while isActive(myRun) do
+        state = "cast"
+        castPos = nil
+        result = nil
+        status.Text = "Status: Casting..."
+        click()
+
+        waitWhile(myRun, "cast", castTimeout)
+        if not isActive(myRun) then break end
+
+        if state == "cast" then
+            status.Text = "Status: kail tidak mendarat, ulang..."
+            state = "idle"
+            task.wait(1)
+            continue
+        end
+
+        status.Text = "Status: Menunggu ikan..."
+        waitWhile(myRun, "wait", waitTimeout)
+        if not isActive(myRun) then break end
+
+        if state == "wait" then
+            status.Text = "Status: tidak ada ikan, tarik kail..."
+            state = "idle"
+            click() -- tarik kail yang masih di air
+            task.wait(2)
+            continue
+        end
+
+        waitWhile(myRun, "reel", resultTimeout)
+        if not isActive(myRun) then break end
+
+        if state == "done" then
+            if result == SOUND_CAUGHT then
+                caught += 1
+                status.Text = "Status: dapat ikan!"
+            else
+                escaped += 1
+                status.Text = "Status: ikan lepas"
+            end
+            statsLabel.Text = string.format("dapat: %d | lepas: %d", caught, escaped)
+        else
+            status.Text = "Status: hasil tidak terdeteksi"
+        end
+
+        state = "idle"
+        task.wait(afterDelay)
+    end
+
+    state = "idle"
+    if runId == myRun then
+        status.Text = "Status: OFF"
+    end
+end
+
+startButton.MouseButton1Click:Connect(function()
+    if running then return end
+
+    runId += 1
+    running = true
+    status.Text = "Status: Starting..."
+
+    task.spawn(fishingLoop, runId)
+end)
+
+stopButton.MouseButton1Click:Connect(function()
+    running = false
+    runId += 1 -- loop lama pasti berhenti, walau START ditekan lagi cepat-cepat
+    status.Text = "Status: STOPPED"
+end)
+
+modeButton.MouseButton1Click:Connect(function()
+    local idx = table.find(CLICK_MODES, clickMode) or 1
+    clickMode = CLICK_MODES[idx % #CLICK_MODES + 1]
+    modeButton.Text = "MODE: " .. clickMode
+end)
+
+testButton.MouseButton1Click:Connect(function()
+    status.Text = "Status: tes klik (" .. clickMode .. ")"
+    task.spawn(click)
+end)
+
+-- ===== AKHIR SCRIPT v6 (kalau baris ini tidak ada di akhir file, filenya kepotong) =====
