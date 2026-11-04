@@ -1,4 +1,4 @@
--- AUTO FISHING - ISLAND REBORN (v16: Pure Timer & Guaranteed Auto Reel)
+-- AUTO FISHING - ISLAND REBORN (v18: Bobber Sink / Pull Down Detection)
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
@@ -6,10 +6,11 @@ local VIM = game:GetService("VirtualInputManager")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- ===== Config Waktu (Bisa disesuaikan dengan kecepatan ikan di game) =====
-local clickDelay = 0.15        -- Lama tombol layar ditahan saat klik
-local fishingDuration = 4.5    -- Durasi detik dari kail dilempar sampai ikan menyambar
-local postReelWait = 1.5       -- Jeda setelah narik ikan sebelum lempar lagi
+-- ===== Config =====
+local clickDelay = 0.15          -- Lama tombol layar ditahan saat klik
+local sinkThreshold = 0.8        -- Seberapa jauh (dalam stud) pelampung harus turun ke bawah untuk dianggap ditarik ikan
+local maxWaitTime = 25           -- Maksimal tunggu ikan menyambar sebelum lempar ulang
+local postReelWait = 1.5         -- Jeda setelah narik ikan sebelum lempar lagi
 
 -- Hapus GUI lama agar bersih
 pcall(function()
@@ -45,7 +46,7 @@ corner.Parent = frame
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 30)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH v16"
+title.Text = "ISLAND AUTO FISH v18"
 title.TextColor3 = Color3.new(1, 1, 1)
 title.TextSize = 15
 title.Font = Enum.Font.GothamBold
@@ -63,7 +64,7 @@ status.Parent = frame
 
 local startButton = Instance.new("TextButton")
 startButton.Position = UDim2.fromOffset(10, 80)
-startButton.Size = UDim2.fromOffset(95, 45)
+startButton.Size = UDim2.new(95, 45)
 startButton.Text = "START"
 startButton.BackgroundColor3 = Color3.fromRGB(30, 150, 70)
 startButton.TextColor3 = Color3.new(1, 1, 1)
@@ -73,7 +74,7 @@ startButton.Parent = frame
 
 local stopButton = Instance.new("TextButton")
 stopButton.Position = UDim2.fromOffset(115, 80)
-stopButton.Size = UDim2.fromOffset(95, 45)
+stopButton.Size = UDim2.new(95, 45)
 stopButton.Text = "STOP"
 stopButton.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
 stopButton.TextColor3 = Color3.new(1, 1, 1)
@@ -81,7 +82,7 @@ stopButton.Font = Enum.Font.GothamBold
 stopButton.TextSize = 14
 stopButton.Parent = frame
 
--- Dragging GUI supaya bisa digeser di HP
+-- Dragging GUI
 do
     local dragging, dragStart, startPos
     title.InputBegan:Connect(function(input)
@@ -130,24 +131,74 @@ local function tapScreen()
     end)
 end
 
--- ===== Loop Utama Mancing =====
+-- Mencari part pelampung di dalam game
+local function findBobberPart()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local name = obj.Name:lower()
+            if name:find("bobber") or name:find("float") or name:find("hook") then
+                return obj
+            end
+        end
+    end
+    return nil
+end
+
+-- ===== Loop Utama Pemantauan Pelampung Amblas =====
 local function fishingLoop(myRun)
     while isActive(myRun) do
         status.Text = "Status: Melempar Kail..."
         tapScreen()
         
-        status.Text = "Status: Menunggu Ikan Menyambar..."
-        local waitStart = os.clock()
+        status.Text = "Status: Mencari Pelampung..."
+        local bobber = nil
+        local startWait = os.clock()
         
-        while isActive(myRun) and (os.clock() - waitStart < fishingDuration) do
-            task.wait(0.05)
+        -- Tunggu pelampung muncul di air
+        while isActive(myRun) and (os.clock() - startWait < 8) do
+            bobber = findBobberPart()
+            if bobber then break end
+            task.wait(0.1)
         end
         
         if not isActive(myRun) then break end
         
-        status.Text = "Status: STRIKE! Narik Kail..."
-        tapScreen() -- Menarik kail secara otomatis
+        if not bobber then
+            status.Text = "Status: Pelampung Tidak Ketemu, Mengulang..."
+            task.wait(1)
+            continue
+        end
         
+        status.Text = "Status: Menunggu Pelampung Tertarik..."
+        local biteStart = os.clock()
+        local fishBited = false
+        
+        -- Catat posisi awal tinggi (sumbu Y) pelampung saat sudah stabil di air
+        task.wait(1.5) -- Beri jeda agar pelampung benar-benar diam di permukaan air
+        local initialY = bobber.Position.Y
+        
+        -- Pantau pergerakan turun secara real-time
+        while isActive(myRun) and bobber.Parent and (os.clock() - biteStart < maxWaitTime) do
+            local currentY = bobber.Position.Y
+            
+            -- Jika posisi Y pelampung turun melewati batas sinkThreshold (artinya amblas ke bawah)
+            if (initialY - currentY) >= sinkThreshold then
+                fishBited = true
+                break
+            end
+            
+            task.wait(0.04)
+        end
+        
+        if not isActive(myRun) then break end
+        
+        if fishBited then
+            status.Text = "Status: STRIKE! Pelampung Amblas!"
+        else
+            status.Text = "Status: Timeout, Menarik Kail..."
+        end
+        
+        tapScreen() -- Langsung tarik kail pas pelampung ketarik ke bawah
         task.wait(postReelWait)
     end
     
