@@ -1,5 +1,8 @@
-for _, v in pairs(workspace:GetChildren()) do
-    if string.find(string.lower(v.Name), "slime") or v.Name == "WildMobs" or v.Name == "Mobs" then
-        print("Ketemu objek/folder:", v.Name)
+print("--- MULAI SCAN NAMA SLIME ---")
+for _, v in pairs(workspace:GetDescendants()) do
+    -- Cari objek yang mengandung kata "slime" atau model mob
+    if string.find(string.lower(v.Name), "slime") then
+        print("Ketemu Objek Slime:", v.Name, "| Jenis:", v.ClassName, "| Parent:", v.Parent.Name)
     end
 end
+print("--- SELESAI SCAN ---")
