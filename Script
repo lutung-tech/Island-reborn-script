@@ -1,4 +1,4 @@
--- AUTO FISHING - ISLAND REBORN (v16: Stable Timer & Auto Recast)
+-- AUTO FISHING - ISLAND REBORN (v16: Pure Timer & Guaranteed Auto Reel)
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
@@ -6,12 +6,12 @@ local VIM = game:GetService("VirtualInputManager")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- ===== Config (Bisa diatur waktunya) =====
+-- ===== Config Waktu (Bisa disesuaikan dengan kecepatan ikan di game) =====
 local clickDelay = 0.15        -- Lama tombol layar ditahan saat klik
-local fishingDuration = 4.5    -- Waktu tunggu dari lempar sampai ikan menyambar (sesuaikan jika kurang pas)
-local postReelWait = 1.5       -- Jeda setelah narik ikan sebelum melempar kembali
+local fishingDuration = 4.5    -- Durasi detik dari kail dilempar sampai ikan menyambar
+local postReelWait = 1.5       -- Jeda setelah narik ikan sebelum lempar lagi
 
--- Hapus GUI lama agar tidak menumpuk
+-- Hapus GUI lama agar bersih
 pcall(function()
     local old = playerGui:FindFirstChild("IslandAutoFish")
     if old then old:Destroy() end
@@ -25,7 +25,7 @@ local function isActive(id)
     return running and runId == id
 end
 
--- ===== GUI Sederhana =====
+-- ===== GUI =====
 local gui = Instance.new("ScreenGui")
 gui.Name = "IslandAutoFish"
 gui.ResetOnSpawn = false
@@ -81,7 +81,7 @@ stopButton.Font = Enum.Font.GothamBold
 stopButton.TextSize = 14
 stopButton.Parent = frame
 
--- Dragging GUI supaya bisa digeser di layar HP
+-- Dragging GUI supaya bisa digeser di HP
 do
     local dragging, dragStart, startPos
     title.InputBegan:Connect(function(input)
@@ -130,7 +130,7 @@ local function tapScreen()
     end)
 end
 
--- ===== Loop Utama Mancing Berkelanjutan =====
+-- ===== Loop Utama Mancing =====
 local function fishingLoop(myRun)
     while isActive(myRun) do
         status.Text = "Status: Melempar Kail..."
@@ -139,7 +139,6 @@ local function fishingLoop(myRun)
         status.Text = "Status: Menunggu Ikan Menyambar..."
         local waitStart = os.clock()
         
-        -- Menunggu durasi waktu mancing tanpa takut tersendat oleh error folder game
         while isActive(myRun) and (os.clock() - waitStart < fishingDuration) do
             task.wait(0.05)
         end
@@ -147,9 +146,9 @@ local function fishingLoop(myRun)
         if not isActive(myRun) then break end
         
         status.Text = "Status: STRIKE! Narik Kail..."
-        tapScreen() -- Menarik kail saat ikan menyambar
+        tapScreen() -- Menarik kail secara otomatis
         
-        task.wait(postReelWait) -- Jeda sebentar sebelum melempar kail lagi secara otomatis
+        task.wait(postReelWait)
     end
     
     if runId == myRun then
