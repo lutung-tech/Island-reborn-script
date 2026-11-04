@@ -1,4 +1,4 @@
--- AUTO FISHING - ISLAND REBORN (v21: Fresh Clean GUI & Fixed Layout)
+-- AUTO FISHING - ISLAND REBORN (v25: Tool & Attribute Change Detector)
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
@@ -6,17 +6,16 @@ local VIM = game:GetService("VirtualInputManager")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- ===== Config Waktu =====
+-- ===== Config =====
 local clickDelay = 0.15        
-local fishingDuration = 4.8    
-local postReelWait = 1.5       
+local maxWaitTime = 25         -- Batas maksimal tunggu sambaran sebelum lempar ulang
+local postReelWait = 1.0       
 
--- Hapus SEMUA GUI lama yang mungkin nyangkut di PlayerGui
-for _, guiObj in ipairs(playerGui:GetChildren()) do
-    if guiObj.Name == "IslandAutoFish" or guiObj.Name == "IslandAutoFish_v20" then
-        guiObj:Destroy()
-    end
-end
+-- Hapus GUI lama
+pcall(function()
+    local old = playerGui:FindFirstChild("IslandAutoFish")
+    if old then old:Destroy() end
+end)
 
 local running = false
 local runId = 0 
@@ -26,7 +25,7 @@ local function isActive(id)
     return running and runId == id
 end
 
--- ===== GUI Baru (Bersih dari Sisa Cache Lama) =====
+-- ===== GUI v25 =====
 local gui = Instance.new("ScreenGui")
 gui.Name = "IslandAutoFish"
 gui.ResetOnSpawn = false
@@ -47,7 +46,7 @@ corner.Parent = frame
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 35)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH v21"
+title.Text = "ISLAND AUTO FISH v25"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
@@ -92,7 +91,7 @@ local stopCorner = Instance.new("UICorner")
 stopCorner.CornerRadius = UDim.new(0, 6)
 stopCorner.Parent = stopButton
 
--- Dragging GUI supaya bisa digeser dengan mudah di layar HP
+-- Dragging GUI
 do
     local dragging, dragStart, startPos
     title.InputBegan:Connect(function(input)
@@ -117,7 +116,7 @@ gui.Destroying:Connect(function()
     for _, c in ipairs(uiConnections) do c:Disconnect() end
 end)
 
--- ===== Simulator Tap Layar HP =====
+-- ===== Simulator Tap Layar =====
 local function insideFrame(x, y)
     local p, s = frame.AbsolutePosition, frame.AbsoluteSize
     return x >= p.X and x <= p.X + s.X and y >= p.Y and y <= p.Y + s.Y
@@ -141,23 +140,60 @@ local function tapScreen()
     end)
 end
 
--- ===== Loop Utama Mancing =====
+-- Mendapatkan tool pancing yang sedang dipegang pemain
+local function getFishingRod()
+    local char = player.Character
+    if not char then return nil end
+    return char:FindFirstChildOfClass("Tool")
+end
+
+-- ===== Loop Utama Deteksi Perubahan =====
 local function fishingLoop(myRun)
     while isActive(myRun) do
         status.Text = "Status: Melempar Kail..."
-        tapScreen()
+        tapScreen() -- Lempar pancingan
         
-        status.Text = "Status: Menunggu Ikan..."
+        status.Text = "Status: Memantau Perubahan Game..."
         local waitStart = os.clock()
+        local fishBited = false
+        local toolConn = nil
         
-        while isActive(myRun) and (os.clock() - waitStart < fishingDuration) do
+        local rod = getFishingRod()
+        if rod then
+            -- Pantau jika ada Attribute yang berubah pada tool pancing (seperti sinyal 'Tug', 'Hooked', dll)
+            toolConn = rod.AttributeChanged:Connect(function(attrName)
+                local val = rod:GetAttribute(attrName)
+                -- Jika ada perubahan atribut yang bernilai true atau angka aktif
+                if val == true or (typeof(val) == "number" and val > 0) then
+                    fishBited = true
+                end
+            end)
+            
+            -- Pantau juga jika ada perubahan nilai properti pada tool
+            table.insert(uiConnections, rod.Changed:Connect(function(prop)
+                if prop == "Parent" and rod.Parent == nil then
+                    fishBited = true
+                end
+            end))
+        end
+        
+        -- Tunggu sampai ikan menyambar atau terkena timeout
+        while isActive(myRun) and not fishBited and (os.clock() - waitStart < maxWaitTime) do
+            -- Cek cadangan: jika tool pancing tiba-tiba lepas atau berubah status
+            local currentRod = getFishingRod()
+            if not currentRod or currentRod ~= rod then
+                fishBited = true
+                break
+            end
             task.wait(0.05)
         end
         
+        if toolConn then toolConn:Disconnect() end
+        
         if not isActive(myRun) then break end
         
-        status.Text = "Status: STRIKE! Narik Kail..."
-        tapScreen() -- Menarik kail otomatis
+        status.Text = "Status: STRIKE! Menarik Kail..."
+        tapScreen() -- Tarik pancingan
         
         task.wait(postReelWait)
     end
@@ -172,7 +208,7 @@ startButton.MouseButton1Click:Connect(function()
     if running then return end
     runId = runId + 1
     running = true
-    status.Text = "Status: Starting..."
+    status.Text = "Status: Berjalan"
     task.spawn(fishingLoop, runId)
 end)
 
