@@ -1,232 +1,111 @@
--- AUTO FISHING - ISLAND REBORN (v28: Bobber Water-Level Tracker)
+-- AUTO FARM SLIME TURBO (Fast Attack & No Damage)
 local Players = game:GetService("Players")
-local UIS = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
 local VIM = game:GetService("VirtualInputManager")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- ===== Config =====
-local clickDelay = 0.15        
-local sinkLimit = 0.5          -- Batas seberapa jauh pelampung turun ke bawah (dalam stud) untuk dianggap ditarik ikan
-local maxWaitTime = 25         -- Batas maksimal nunggu ikan
-local postReelWait = 1.0       
+-- ===== Config Turbo =====
+local hoverHeight = 8      -- Tinggi melayang agar aman dari damage slime
+local attackSpeed = 0.05   -- Jeda super cepat antar serangan (turbo)
 
--- Hapus GUI lama
+-- Hapus GUI lama jika ada
 pcall(function()
-    local old = playerGui:FindFirstChild("IslandAutoFish")
+    local old = playerGui:FindFirstChild("SlimeTurboFarm")
     if old then old:Destroy() end
 end)
 
-local running = false
-local runId = 0 
-local uiConnections = {}
+local farming = false
+local runId = 0
 
-local function isActive(id)
-    return running and runId == id
-end
-
--- ===== GUI v28 =====
+-- ===== GUI Sederhana =====
 local gui = Instance.new("ScreenGui")
-gui.Name = "IslandAutoFish"
+gui.Name = "SlimeTurboFarm"
 gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
 gui.Parent = playerGui
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(230, 130)
-frame.Position = UDim2.new(0.5, -115, 0.35, -65)
-frame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
-frame.BorderSizePixel = 0
+frame.Size = UDim2.fromOffset(200, 100)
+frame.Position = UDim2.new(0.5, -100, 0.3, -50)
+frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 frame.Parent = gui
 
 local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 10)
 corner.Parent = frame
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 35)
+title.Size = UDim2.new(1, 0, 0, 30)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH v28"
-title.TextColor3 = Color3.fromRGB(255, 255, 255)
-title.TextSize = 14
+title.Text = "TURBO SLIME FARM"
+title.TextColor3 = Color3.new(1, 1, 1)
 title.Font = Enum.Font.GothamBold
+title.TextSize = 13
 title.Parent = frame
 
 local status = Instance.new("TextLabel")
-status.Position = UDim2.new(0, 12, 0, 38)
-status.Size = UDim2.new(1, -24, 0, 25)
+status.Position = UDim2.new(0, 10, 0, 35)
+status.Size = UDim2.new(1, -20, 0, 20)
 status.BackgroundTransparency = 1
 status.Text = "Status: OFF"
-status.TextColor3 = Color3.fromRGB(180, 180, 180)
-status.TextSize = 12
-status.Font = Enum.Font.Gotham
-status.TextXAlignment = Enum.TextXAlignment.Left
+status.TextColor3 = Color3.fromRGB(200, 200, 200)
+status.TextSize = 11
 status.Parent = frame
 
-local startButton = Instance.new("TextButton")
-startButton.Position = UDim2.new(0, 12, 0, 75)
-startButton.Size = UDim2.new(0.5, -16, 0, 40)
-startButton.Text = "START"
-startButton.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
-startButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-startButton.Font = Enum.Font.GothamBold
-startButton.TextSize = 13
-startButton.Parent = frame
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Position = UDim2.new(0, 10, 0, 60)
+toggleBtn.Size = UDim2.new(1, -20, 0, 30)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
+toggleBtn.Text = "START TURBO"
+toggleBtn.TextColor3 = Color3.new(1, 1, 1)
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.TextSize = 12
+toggleBtn.Parent = frame
 
-local startCorner = Instance.new("UICorner")
-startCorner.CornerRadius = UDim.new(0, 6)
-startCorner.Parent = startButton
+local btnCorner = Instance.new("UICorner")
+btnCorner.Parent = toggleBtn
 
-local stopButton = Instance.new("TextButton")
-stopButton.Position = UDim2.new(0.5, 4, 0, 75)
-stopButton.Size = UDim2.new(0.5, -16, 0, 40)
-stopButton.Text = "STOP"
-stopButton.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
-stopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-stopButton.Font = Enum.Font.GothamBold
-stopButton.TextSize = 13
-stopButton.Parent = frame
-
-local stopCorner = Instance.new("UICorner")
-stopCorner.CornerRadius = UDim.new(0, 6)
-stopCorner.Parent = stopButton
-
--- Dragging GUI
-do
-    local dragging, dragStart, startPos
-    title.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true dragStart = input.Position startPos = frame.Position
-        end
-    end)
-    table.insert(uiConnections, UIS.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local d = input.Position - dragStart
-            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-        end
-    end))
-    table.insert(uiConnections, UIS.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
-    end))
-end
-
-gui.Destroying:Connect(function()
-    running = false 
-    runId = runId + 1
-    for _, c in ipairs(uiConnections) do c:Disconnect() end
-end)
-
--- ===== Simulator Tap Layar =====
-local function insideFrame(x, y)
-    local p, s = frame.AbsolutePosition, frame.AbsoluteSize
-    return x >= p.X and x <= p.X + s.X and y >= p.Y and y <= p.Y + s.Y
-end
-
-local function tapScreen()
-    local cam = workspace.CurrentCamera
-    local vs = cam and cam.ViewportSize or Vector2.new(800, 600)
+-- Fungsi mencari Slime terdekat
+local function findNearestSlime()
+    local char = player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return nil end
+    local hrp = char.HumanoidRootPart
     
-    local tx, ty = vs.X * 0.5, vs.Y * 0.5
-    if insideFrame(tx, ty) then
-        tx = vs.X * 0.5
-        ty = vs.Y * 0.25
-    end
-
-    local touchId = 9
-    pcall(function()
-        VIM:SendTouchEvent(touchId, 0, tx, ty) 
-        task.wait(clickDelay)
-        VIM:SendTouchEvent(touchId, 2, tx, ty) 
-    end)
-end
-
--- Mencari objek pelampung di workspace
-local function findBobber()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") then
+    local nearest = nil
+    local shortestDist = math.huge
+    
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj ~= char then
             local name = obj.Name:lower()
-            if name:find("bobber") or name:find("float") or name:find("hook") then
-                return obj
+            if name:find("slime") then
+                local hum = obj:FindFirstChildOfClass("Humanoid")
+                local part = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+                
+                if hum and hum.Health > 0 and part then
+                    local dist = (part.Position - hrp.Position).Magnitude
+                    if dist < shortestDist then
+                        shortestDist = dist
+                        nearest = part
+                    end
+                end
             end
         end
     end
-    return nil
+    return nearest
 end
 
--- ===== Loop Utama v28 =====
-local function fishingLoop(myRun)
-    while isActive(myRun) do
-        status.Text = "Status: Melempar Kail..."
-        tapScreen() -- Lempar pancingan
-        
-        status.Text = "Status: Mencari Pelampung..."
-        local bobber = nil
-        local startFind = os.clock()
-        
-        -- Tunggu sampai pelampung muncul di air
-        while isActive(myRun) and (os.clock() - startFind < 6) do
-            bobber = findBobber()
-            if bobber then break end
-            task.wait(0.1)
-        end
-        
-        if not isActive(myRun) then break end
-        
-        if not bobber then
-            status.Text = "Status: Pelampung Hilang, Ulang..."
-            task.wait(1)
-            continue
-        end
-        
-        status.Text = "Status: Memantau Pelampung..."
-        local biteStart = os.clock()
-        local hooked = false
-        
-        -- Beri jeda 1 detik agar pelampung stabil di permukaan air
-        task.wait(1.0)
-        if not bobber.Parent then continue end
-        local initialY = bobber.Position.Y
-        
-        -- Pantau penurunan posisi Y secara real-time
-        while isActive(myRun) and bobber.Parent and (os.clock() - biteStart < maxWaitTime) do
-            local currentY = bobber.Position.Y
-            -- Jika pelampung turun ke bawah melewati batas sinkLimit
-            if (initialY - currentY) >= sinkLimit then
-                hooked = true
-                break
-            end
-            task.wait(0.03)
-        end
-        
-        if not isActive(myRun) then break end
-        
-        if hooked then
-            status.Text = "Status: STRIKE! Pelampung Tarik!"
-        else
-            status.Text = "Status: Timeout, Menarik Kail..."
-        end
-        
-        tapScreen() -- Tarik pancingan
-        task.wait(postReelWait)
-    end
+-- Fungsi Klik Cepat (Turbo Tap)
+local function turboClick()
+    local cam = Workspace.CurrentCamera
+    local vs = cam and cam.ViewportSize or Vector2.new(800, 600)
+    local tx, ty = vs.X * 0.5, vs.Y * 0.5
     
-    if runId == myRun then
-        status.Text = "Status: OFF"
-    end
+    pcall(function()
+        VIM:SendMouseButtonEvent(tx, ty, 0, true, game, 0)
+        VIM:SendMouseButtonEvent(tx, ty, 0, false, game, 0)
+    end)
 end
 
--- ===== Tombol Kontrol =====
-startButton.MouseButton1Click:Connect(function()
-    if running then return end
-    runId = runId + 1
-    running = true
-    status.Text = "Status: Berjalan"
-    task.spawn(fishingLoop, runId)
-end)
-
-stopButton.MouseButton1Click:Connect(function()
-    running = false
-    runId = runId + 1
-    status.Text = "Status: STOPPED"
-end)
+-- Loop Turbo Farm
+local function startTurbo(myId)
+    while farming and runId ==
