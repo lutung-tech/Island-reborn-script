@@ -1,68 +1,29 @@
--- Script Auto Farm Slime Final - Roblox Islands
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-local Workspace = game:GetService("Workspace")
+-- Auto Fish Loop untuk Islands Reborn / Game Sejenis
+getgenv().AutoFishing = true
 
-print("[Auto Farm] Berhasil terhubung ke folder Entities!")
-
--- Fungsi spesifik mencari slime di dalam folder Entities
-local function getSlimeTarget()
-    local entitiesFolder = Workspace:FindFirstChild("Entities")
-    if entitiesFolder then
-        for _, obj in pairs(entitiesFolder:GetChildren()) do
-            if string.lower(obj.Name) == "slime" then
-                local hrp = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("PrimaryPart") or obj:FindFirstChild("InnerSlime")
-                local hum = obj:FindFirstChildOfClass("Humanoid")
-                
-                -- Cek jika punya Humanoid dan masih hidup
-                if hrp then
-                    if hum and hum.Health <= 0 then
-                        continue
-                    end
-                    return hrp
-                end
-            end
-        end
-    end
-    
-    -- Cadangan pencarian menyeluruh jika Entities sedang kosong/bergeser
-    for _, obj in pairs(Workspace:GetDescendants()) do
-        if obj.Name == "slime" and obj:IsA("Model") then
-            local hrp = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("PrimaryPart")
-            local hum = obj:FindFirstChildOfClass("Humanoid")
-            if hrp and (not hum or hum.Health > 0) then
-                return hrp
-            end
-        end
-    end
-    
-    return nil
-end
-
--- Loop Utama Auto Farm & Attack
 task.spawn(function()
-    while true do
-        task.wait(0.1)
+    print("[AutoFish] Berjalan...")
+    while getgenv().AutoFishing do
         pcall(function()
-            local char = LocalPlayer.Character
-            if char and char:FindFirstChild("HumanoidRootPart") then
-                local targetHrp = getSlimeTarget()
-                if targetHrp then
-                    -- Teleport melayang tepat di atas slime
-                    char.HumanoidRootPart.CFrame = targetHrp.CFrame * CFrame.new(0, 4, 0)
+            local player = game:GetService("Players").LocalPlayer
+            local char = player.Character
+            if char then
+                local tool = char:FindFirstChildOfClass("Tool")
+                if tool then
+                    -- 1. Klik sekali untuk melempar kail
+                    tool:Activate()
                     
-                    -- Otomatis ambil & aktifkan senjata
-                    local tool = char:FindFirstChildOfClass("Tool")
-                    if not tool then
-                        local backpackTool = LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
-                        if backpackTool then
-                            backpackTool.Parent = char
-                        end
-                    else
-                        tool:Activate()
-                    end
+                    -- 2. Waktu tunggu sampai ikan menyambar (Sesuaikan durasi ini jika kurang pas, misal 3.5 atau 4 detik)
+                    task.wait(7)
+                    
+                    -- 3. Klik sekali lagi untuk menarik ikan ke inventory
+                    tool:Activate()
                 end
             end
         end)
+        
+        -- Jeda antar siklus lemparan pancing baru
+        task.wait(1.5)
     end
+    print("[AutoFishing] Berhenti.")
 end)
