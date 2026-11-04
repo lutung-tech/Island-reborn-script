@@ -1,37 +1,56 @@
--- AUTO FISHING - ISLAND REBORN (v12: Fix Stuck After Reel & Force Recast)
+-- AUTO FISHING - ISLAND REBORN (v5: klik HP + deteksi sambaran + mode debug)
+-- Start / Stop GUI
+-- Sinyal sambaran: Attribute "Tug", ikan mendekati bobber, bobber bergeser
+
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
 local CoreGui = game:GetService("CoreGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 
 -- ===== Config =====
-local clickDelay = 0.15        -- Lama tombol ditahan saat klik
-local castTimeout = 10         -- Toleransi waktu lempar kail
-local biteTimeout = 45         -- Maksimal tunggu ikan
-local settleDelay = 3.5        -- Jeda awal agar kail stabil di air
-local moveThreshold = 4.0      -- Jarak geser minimal untuk deteksi sambaran
-local postReelWait = 2.0       -- Jeda setelah narik ikan sebelum lempar lagi
+local clickDelay = 0.15        -- lama tombol mouse ditahan
+local bobberTimeout = 15       -- tunggu bobber muncul setelah cast
+local reelTimeout = 60         -- kalau tidak ada sambaran selama ini, cast ulang
+local goneTimeout = 10         -- tunggu bobber hilang setelah reel
+local CHECK_OWNER = true       -- abaikan bobber milik pemain lain
 
--- ===== Parent GUI =====
+-- Deteksi sambaran (nyalakan/matikan per sinyal)
+local USE_FISH_PROXIMITY = true   -- ikan (bayangan) mendekati bobber
+local USE_MOVEMENT = true         -- bobber bergeser dari posisi diamnya
+local BITE_DISTANCE = 4           -- jarak (stud) ikan ke bobber yang dianggap menyambar
+local MOVE_THRESHOLD = 2.5        -- bobber bergeser sejauh ini (stud) dianggap ditarik ikan
+local SETTLE_TIME = 2             -- tunggu bobber diam dulu sebelum deteksi dimulai
+local FISH_KEYWORDS = { "fish", "shadow", "ikan" }
+local FISH_EXCLUDE = { "fisherman", "rod", "bobber" }
+
+-- ===== Parent GUI (aman kalau CoreGui/gethui gagal) =====
 local function getGuiParent()
     local ok, result = pcall(function()
         return (gethui and gethui()) or CoreGui
     end)
-    if ok and result then return result end
+    if ok and result then
+        return result
+    end
     return player:WaitForChild("PlayerGui")
 end
 
 local guiParent = getGuiParent()
 
+-- Hapus GUI lama
 pcall(function()
     local old = guiParent:FindFirstChild("IslandAutoFish")
     if old then old:Destroy() end
 end)
+pcall(function()
+    local old = player:WaitForChild("PlayerGui"):FindFirstChild("IslandAutoFish")
+    if old then old:Destroy() end
+end)
 
 local running = false
-local runId = 0 
+local runId = 0
 local uiConnections = {}
 
 local function isActive(id)
@@ -43,12 +62,18 @@ local gui = Instance.new("ScreenGui")
 gui.Name = "IslandAutoFish"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
-gui.Parent = guiParent
+
+local okParent = pcall(function()
+    gui.Parent = guiParent
+end)
+if not okParent or not gui.Parent then
+    gui.Parent = player:WaitForChild("PlayerGui")
+end
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(210, 130)
-frame.Position = UDim2.new(0, 20, 0.5, -65)
-frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+frame.Size = UDim2.fromOffset(210, 200)
+frame.Position = UDim2.new(0, 20, 0.5, -100)
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 frame.Parent = gui
 
 local corner = Instance.new("UICorner")
@@ -58,10 +83,11 @@ corner.Parent = frame
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 30)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH v12"
+title.Text = "ISLAND AUTO FISH v5"
 title.TextColor3 = Color3.new(1, 1, 1)
-title.TextSize = 14
+title.TextSize = 16
 title.Font = Enum.Font.GothamBold
+title.Active = true
 title.Parent = frame
 
 local status = Instance.new("TextLabel")
@@ -69,203 +95,586 @@ status.Position = UDim2.fromOffset(5, 35)
 status.Size = UDim2.new(1, -10, 0, 25)
 status.BackgroundTransparency = 1
 status.Text = "Status: OFF"
-status.TextColor3 = Color3.fromRGB(200, 200, 200)
+status.TextColor3 = Color3.fromRGB(220, 220, 220)
 status.TextSize = 12
 status.TextWrapped = true
 status.Parent = frame
 
 local startButton = Instance.new("TextButton")
 startButton.Position = UDim2.fromOffset(10, 75)
-startButton.Size = UDim2.fromOffset(90, 40)
+startButton.Size = UDim2.fromOffset(90, 35)
 startButton.Text = "START"
-startButton.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
+startButton.BackgroundColor3 = Color3.fromRGB(30, 150, 70)
 startButton.TextColor3 = Color3.new(1, 1, 1)
-startButton.Font = Enum.Font.GothamBold
 startButton.Parent = frame
 
 local stopButton = Instance.new("TextButton")
 stopButton.Position = UDim2.fromOffset(110, 75)
-stopButton.Size = UDim2.fromOffset(90, 40)
+stopButton.Size = UDim2.fromOffset(90, 35)
 stopButton.Text = "STOP"
-stopButton.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+stopButton.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
 stopButton.TextColor3 = Color3.new(1, 1, 1)
-stopButton.Font = Enum.Font.GothamBold
 stopButton.Parent = frame
 
--- Dragging GUI
+local debugButton = Instance.new("TextButton")
+debugButton.Position = UDim2.fromOffset(10, 120)
+debugButton.Size = UDim2.fromOffset(190, 32)
+debugButton.Text = "DEBUG: OFF"
+debugButton.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+debugButton.TextColor3 = Color3.new(1, 1, 1)
+debugButton.Parent = frame
+
+local modeButton = Instance.new("TextButton")
+modeButton.Position = UDim2.fromOffset(10, 160)
+modeButton.Size = UDim2.fromOffset(110, 32)
+modeButton.Text = "MODE: auto"
+modeButton.BackgroundColor3 = Color3.fromRGB(60, 80, 110)
+modeButton.TextColor3 = Color3.new(1, 1, 1)
+modeButton.Parent = frame
+
+local testButton = Instance.new("TextButton")
+testButton.Position = UDim2.fromOffset(130, 160)
+testButton.Size = UDim2.fromOffset(70, 32)
+testButton.Text = "TES KLIK"
+testButton.BackgroundColor3 = Color3.fromRGB(110, 90, 40)
+testButton.TextColor3 = Color3.new(1, 1, 1)
+testButton.Parent = frame
+
+-- GUI Draggable
 do
     local dragging, dragStart, startPos
+
     title.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true dragStart = input.Position startPos = frame.Position
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
         end
     end)
+
     table.insert(uiConnections, UIS.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
             local d = input.Position - dragStart
-            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y
+            )
         end
     end))
+
     table.insert(uiConnections, UIS.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
     end))
 end
 
 gui.Destroying:Connect(function()
-    running = false 
+    running = false
     runId = runId + 1
-    for _, c in ipairs(uiConnections) do c:Disconnect() end
+    for _, c in ipairs(uiConnections) do
+        c:Disconnect()
+    end
 end)
 
--- ===== Simulator Tap Layar =====
+-- ===== Debug log =====
+local debugOn = false
+local debugLines = {}
+
+local function dlog(msg)
+    if not debugOn then return end
+    table.insert(debugLines, string.format("[%.2f] %s", os.clock(), msg))
+    if #debugLines > 500 then
+        table.remove(debugLines, 1)
+    end
+end
+
+local logWindow, logBox
+
+local function showLogWindow(text)
+    if not logWindow then
+        logWindow = Instance.new("Frame")
+        logWindow.Size = UDim2.fromOffset(320, 230)
+        logWindow.Position = UDim2.new(0.5, -160, 0.5, -115)
+        logWindow.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+        logWindow.ZIndex = 5
+        logWindow.Parent = gui
+
+        local scroll = Instance.new("ScrollingFrame")
+        scroll.Size = UDim2.new(1, -10, 1, -45)
+        scroll.Position = UDim2.fromOffset(5, 5)
+        scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+        scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        scroll.ScrollBarThickness = 6
+        scroll.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        scroll.ZIndex = 6
+        scroll.Parent = logWindow
+
+        logBox = Instance.new("TextBox")
+        logBox.Size = UDim2.new(1, -8, 0, 0)
+        logBox.AutomaticSize = Enum.AutomaticSize.Y
+        logBox.BackgroundTransparency = 1
+        logBox.TextColor3 = Color3.new(1, 1, 1)
+        logBox.TextSize = 11
+        logBox.Font = Enum.Font.Code
+        logBox.TextXAlignment = Enum.TextXAlignment.Left
+        logBox.TextYAlignment = Enum.TextYAlignment.Top
+        logBox.MultiLine = true
+        logBox.TextWrapped = true
+        logBox.ClearTextOnFocus = false
+        logBox.ZIndex = 7
+        logBox.Parent = scroll
+
+        local close = Instance.new("TextButton")
+        close.Size = UDim2.new(1, -10, 0, 30)
+        close.Position = UDim2.new(0, 5, 1, -35)
+        close.Text = "TUTUP"
+        close.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
+        close.TextColor3 = Color3.new(1, 1, 1)
+        close.ZIndex = 6
+        close.Parent = logWindow
+        close.MouseButton1Click:Connect(function()
+            logWindow.Visible = false
+        end)
+    end
+
+    logBox.Text = text
+    logWindow.Visible = true
+end
+
+local function flushLog()
+    local text = table.concat(debugLines, "\n")
+    local ok = pcall(function()
+        if setclipboard then
+            setclipboard(text)
+        elseif toclipboard then
+            toclipboard(text)
+        else
+            error("tidak ada fungsi clipboard")
+        end
+    end)
+
+    if ok then
+        status.Text = "Status: log disalin ke clipboard"
+    else
+        status.Text = "Status: log ditampilkan, salin manual"
+        showLogWindow(text)
+        print(text)
+    end
+end
+
+local function dumpAttrs(inst)
+    if not debugOn then return end
+    for k, v in pairs(inst:GetAttributes()) do
+        dlog(string.format("attr %s.%s = %s", inst.Name, k, tostring(v)))
+    end
+end
+
+-- ===== Klik =====
 local function insideFrame(x, y)
     local p, s = frame.AbsolutePosition, frame.AbsoluteSize
     return x >= p.X and x <= p.X + s.X and y >= p.Y and y <= p.Y + s.Y
 end
 
-local function tapScreen()
-    local cam = workspace.CurrentCamera
-    local vs = cam and cam.ViewportSize or Vector2.new(800, 600)
-    
-    local tx, ty = vs.X * 0.5, vs.Y * 0.5
-    if insideFrame(tx, ty) then
-        tx = vs.X * 0.5
-        ty = vs.Y * 0.25
+local touchOnly = UIS.TouchEnabled and not UIS.MouseEnabled
+
+local function getClickPos()
+    local mouse = UIS:GetMouseLocation()
+    if not touchOnly and not insideFrame(mouse.X, mouse.Y) then
+        return mouse.X, mouse.Y
     end
 
-    local touchId = 9
-    pcall(function()
-        VIM:SendTouchEvent(touchId, 0, tx, ty) 
-        task.wait(clickDelay)
-        VIM:SendTouchEvent(touchId, 2, tx, ty) 
-    end)
+    local cam = workspace.CurrentCamera
+    local vs = cam and cam.ViewportSize or Vector2.new(800, 600)
+    local candidates = {
+        Vector2.new(vs.X * 0.5, vs.Y * 0.5),
+        Vector2.new(vs.X * 0.7, vs.Y * 0.5),
+        Vector2.new(vs.X * 0.5, vs.Y * 0.3),
+        Vector2.new(vs.X * 0.3, vs.Y * 0.5),
+        Vector2.new(vs.X * 0.5, vs.Y * 0.7),
+    }
+
+    for _, c in ipairs(candidates) do
+        if not insideFrame(c.X, c.Y) then
+            return c.X, c.Y
+        end
+    end
+
+    return mouse.X, mouse.Y
 end
 
-local function getBobberFolder()
+local CLICK_MODES = { "auto", "touch", "mouse", "tool" }
+local clickMode = "auto"
+
+local function sendMouse(x, y)
+    VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    task.wait(clickDelay)
+    VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+end
+
+local function sendTouch(x, y)
+    local touchId = 7
+    VIM:SendTouchEvent(touchId, 0, x, y)
+    task.wait(clickDelay)
+    VIM:SendTouchEvent(touchId, 2, x, y)
+end
+
+local function activateTool()
+    local char = player.Character
+    local tool = char and char:FindFirstChildOfClass("Tool")
+    if not tool then
+        return false
+    end
+    tool:Activate()
+    task.wait(clickDelay)
+    return true
+end
+
+local function click()
+    local mode = clickMode
+    if mode == "auto" then
+        mode = touchOnly and "touch" or "mouse"
+    end
+
+    if mode == "tool" then
+        if activateTool() then
+            return
+        end
+        mode = touchOnly and "touch" or "mouse"
+    end
+
+    local x, y = getClickPos()
+
+    if mode == "touch" then
+        local ok = pcall(sendTouch, x, y)
+        if ok then
+            return
+        end
+    end
+
+    sendMouse(x, y)
+end
+
+-- ===== Bobber =====
+local function getFolder()
     return workspace:FindFirstChild("FishingBobbers")
 end
 
-local function findMyBobber()
-    local folder = getBobberFolder()
+local OWNER_KEYS = { "Owner", "OwnerId", "OwnerUserId", "OwnerName", "Player", "PlayerName", "UserId" }
+
+local function ownerCheck(inst)
+    for _, key in ipairs(OWNER_KEYS) do
+        local v = inst:GetAttribute(key)
+        if v ~= nil then
+            return v == player.Name or tostring(v) == tostring(player.UserId)
+        end
+    end
+
+    for _, key in ipairs(OWNER_KEYS) do
+        local child = inst:FindFirstChild(key)
+        if child then
+            if child:IsA("ObjectValue") then
+                return child.Value == player
+            elseif child:IsA("StringValue") then
+                return child.Value == player.Name
+            elseif child:IsA("IntValue") or child:IsA("NumberValue") then
+                return child.Value == player.UserId
+            end
+        end
+    end
+
+    return nil
+end
+
+local function isMyBobber(obj, folder)
+    local myName = player.Name:lower()
+    local cur = obj
+
+    while cur and cur ~= folder and cur ~= workspace do
+        local r = ownerCheck(cur)
+        if r ~= nil then
+            return r
+        end
+
+        local lname = cur.Name:lower()
+        if lname:find(myName, 1, true) then
+            return true
+        end
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= player and lname:find(p.Name:lower(), 1, true) then
+                return false
+            end
+        end
+
+        cur = cur.Parent
+    end
+
+    return true
+end
+
+local function findBobber()
+    local folder = getFolder()
     if not folder then return nil end
-    
-    for _, obj in ipairs(folder:GetChildren()) do
-        if obj:IsA("BasePart") or obj:IsA("Model") then
+
+    for _, obj in ipairs(folder:GetDescendants()) do
+        local hasTug = obj:GetAttribute("Tug") ~= nil
+        local isBobberPart = obj:IsA("BasePart")
+            and obj.Name:lower():find("bobber", 1, true) ~= nil
+
+        if (hasTug or isBobberPart) and (not CHECK_OWNER or isMyBobber(obj, folder)) then
             return obj
+        end
+    end
+
+    return nil
+end
+
+local function waitForBobber(id)
+    local start = os.clock()
+
+    while isActive(id) and os.clock() - start < bobberTimeout do
+        local bobber = findBobber()
+        if bobber then
+            return bobber
+        end
+        task.wait(0.1)
+    end
+
+    return nil
+end
+
+local function isTugging(value)
+    if value == true then
+        return true
+    end
+
+    if typeof(value) == "number" and value > 0 then
+        return true
+    end
+
+    return false
+end
+
+-- ===== Posisi & ikan =====
+local function getPos(obj)
+    if obj:IsA("BasePart") then
+        return obj.Position
+    end
+    if obj:IsA("Model") then
+        local ok, pos = pcall(function()
+            return obj:GetPivot().Position
+        end)
+        if ok then
+            return pos
         end
     end
     return nil
 end
 
--- ===== Loop Utama Mancing =====
+local function looksLikeFish(inst)
+    local n = inst.Name:lower()
+
+    for _, bad in ipairs(FISH_EXCLUDE) do
+        if n:find(bad, 1, true) then
+            return false
+        end
+    end
+
+    for _, k in ipairs(FISH_KEYWORDS) do
+        if n:find(k, 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function isInsideAnyCharacter(inst)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Character and inst:IsDescendantOf(p.Character) then
+            return true
+        end
+    end
+    return false
+end
+
+local fishCache, fishCacheAt = {}, 0
+
+local function getFishCandidates(folder)
+    if os.clock() - fishCacheAt > 2 then
+        fishCacheAt = os.clock()
+        fishCache = {}
+
+        for _, inst in ipairs(workspace:GetDescendants()) do
+            if (inst:IsA("BasePart") or inst:IsA("Model")) and looksLikeFish(inst) then
+                local inFolder = folder and inst:IsDescendantOf(folder)
+                if not inFolder and not isInsideAnyCharacter(inst) then
+                    table.insert(fishCache, inst)
+                end
+            end
+        end
+    end
+
+    return fishCache
+end
+
+local function nearestFish(bobber, folder)
+    local bpos = getPos(bobber)
+    if not bpos then return nil, nil end
+
+    local best, bestDist
+    for _, f in ipairs(getFishCandidates(folder)) do
+        if f.Parent then
+            local fpos = getPos(f)
+            if fpos then
+                local d = (fpos - bpos).Magnitude
+                if not bestDist or d < bestDist then
+                    best, bestDist = f, d
+                end
+            end
+        end
+    end
+
+    return best, bestDist
+end
+
+-- ===== Loop utama =====
 local function fishingLoop(myRun)
     while isActive(myRun) do
-        status.Text = "Status: Melempar Kail..."
-        tapScreen()
-        
-        -- Tahap 1: Tunggu kail muncul (diberi batas waktu agar tidak nge-lock selamanya)
-        status.Text = "Status: Menunggu Kail Muncul..."
-        local bobber = nil
-        local startWait = os.clock()
-        
-        while isActive(myRun) and (os.clock() - startWait < castTimeout) do
-            bobber = findMyBobber()
-            if bobber then break end
-            task.wait(0.1)
-        end
-        
+        status.Text = "Status: Casting..."
+        click()
+
+        status.Text = "Status: Searching Bobber..."
+        local bobber = waitForBobber(myRun)
+
         if not isActive(myRun) then break end
-        
-        -- Walaupun bobber tidak terdeteksi secara spesifik, tetap lanjut ke fase tunggu ikan agar tidak macet
+
         if not bobber then
-            status.Text = "Status: Memantau Ikan Langsung..."
-        else
-            -- Tahap 2: Settle Delay (Kail dibiarkan stabil di air)
-            status.Text = "Status: Menunggu Kail Stabil..."
-            local settleStart = os.clock()
-            while isActive(myRun) and (os.clock() - settleStart < settleDelay) do
-                task.wait(0.05)
-            end
+            status.Text = "Status: Bobber not found"
+            dlog("bobber tidak ketemu setelah cast")
+            task.wait(0.5)
+            continue
         end
-        
-        if not isActive(myRun) then break end
-        
-        status.Text = "Status: Menunggu Ikan Menyambar..."
-        
-        -- Tahap 3: Deteksi Sambaran
-        local fishBited = false
-        local connection = nil
-        local initialPos = nil
-        
-        if bobber and bobber.Parent then
-            if bobber:IsA("BasePart") then
-                initialPos = bobber.Position
-            elseif bobber:IsA("Model") and bobber.PrimaryPart then
-                initialPos = bobber.PrimaryPart.Position
+
+        status.Text = "Status: Bobber detected!"
+        local folder = getFolder()
+
+        local reeled = false
+        local connections = {}
+        local watched = {}
+
+        local function triggerReel(reason)
+            if reeled or not isActive(myRun) then return end
+            reeled = true
+            status.Text = "Status: BITE! (" .. reason .. ")"
+            dlog("BITE via " .. reason)
+            task.spawn(click)
+        end
+
+        local function watchTug(obj)
+            if watched[obj] then return end
+            watched[obj] = true
+
+            local function checkTug()
+                if isTugging(obj:GetAttribute("Tug")) then
+                    triggerReel("Tug")
+                end
             end
-            
-            connection = bobber.AttributeChanged:Connect(function(attrName)
-                if attrName:lower() == "tug" then
-                    local val = bobber:GetAttribute(attrName)
-                    if val == true or (typeof(val) == "number" and val > 0) then
-                        fishBited = true
+
+            table.insert(connections,
+                obj:GetAttributeChangedSignal("Tug"):Connect(checkTug)
+            )
+
+            table.insert(connections,
+                obj.AttributeChanged:Connect(function(name)
+                    dlog(string.format("AttributeChanged %s.%s = %s",
+                        obj.Name, name, tostring(obj:GetAttribute(name))))
+                end)
+            )
+
+            checkTug()
+        end
+
+        watchTug(bobber)
+
+        for _, obj in ipairs(bobber:GetDescendants()) do
+            watchTug(obj)
+        end
+
+        local anc = bobber.Parent
+        while anc and anc ~= folder and anc ~= workspace do
+            watchTug(anc)
+            anc = anc.Parent
+        end
+
+        local waitStart = os.clock()
+        local settleAt = waitStart + SETTLE_TIME
+        local basePos = nil
+        local lastDebug = 0
+
+        while isActive(myRun) and bobber.Parent and not reeled
+            and os.clock() - waitStart < reelTimeout do
+
+            local now = os.clock()
+
+            if now >= settleAt then
+                if USE_MOVEMENT then
+                    local pos = getPos(bobber)
+                    if pos then
+                        if not basePos then
+                            basePos = pos
+                        elseif (pos - basePos).Magnitude >= MOVE_THRESHOLD then
+                            triggerReel("bobber bergeser")
+                        end
                     end
                 end
-            end)
-        end
-        
-        local biteStart = os.clock()
-        while isActive(myRun) and not fishBited and (os.clock() - biteStart < biteTimeout) do
-            if bobber and not bobber.Parent then break end
-            
-            if bobber and bobber:GetAttribute("Tug") == true then
-                fishBited = true
-                break
-            end
-            
-            if initialPos and bobber and bobber.Parent then
-                local currentPos = nil
-                if bobber:IsA("BasePart") then
-                    currentPos = bobber.Position
-                elseif bobber:IsA("Model") and bobber.PrimaryPart then
-                    currentPos = bobber.PrimaryPart.Position
-                end
-                
-                if currentPos and (currentPos - initialPos).Magnitude > moveThreshold then
-                    fishBited = true
-                    break
+
+                if USE_FISH_PROXIMITY and not reeled then
+                    local fish, dist = nearestFish(bobber, folder)
+                    if fish and dist <= BITE_DISTANCE then
+                        triggerReel("ikan dekat kail: " .. fish.Name)
+                    end
                 end
             end
-            
+
             task.wait(0.05)
         end
-        
-        if connection then connection:Disconnect() end
-        
-        if not isActive(myRun) then break end
-        
-        -- Tahap 4: Eksekusi Tarik Ikan & Pastikan Auto Recast Jalan Terus
-        if fishBited then
-            status.Text = "Status: STRIKE! Narik Ikan..."
-        else
-            status.Text = "Status: Timeout, Menarik Kail..."
+
+        if isActive(myRun) and bobber.Parent and not reeled then
+            status.Text = "Status: Timeout, recasting..."
         end
-        
-        tapScreen() -- Tarik kail
-        task.wait(postReelWait) -- Jeda animasi selesai, lalu loop akan mengulang melempar kail otomatis
+
+        local goneStart = os.clock()
+        while isActive(myRun) and bobber.Parent
+            and os.clock() - goneStart < goneTimeout do
+            task.wait(0.1)
+        end
+
+        for _, connection in ipairs(connections) do
+            connection:Disconnect()
+        end
+
+        if isActive(myRun) then
+            status.Text = "Status: Next Fishing..."
+            task.wait(0.3)
+        end
     end
-    
+
     if runId == myRun then
         status.Text = "Status: OFF"
     end
 end
 
--- ===== Tombol =====
 startButton.MouseButton1Click:Connect(function()
     if running then return end
+
     runId = runId + 1
     running = true
     status.Text = "Status: Starting..."
+
     task.spawn(fishingLoop, runId)
 end)
 
@@ -274,3 +683,24 @@ stopButton.MouseButton1Click:Connect(function()
     runId = runId + 1
     status.Text = "Status: STOPPED"
 end)
+
+-- ===== Trace (mode debug) =====
+local traceConnections = {}
+local traceBudget, traceWindowStart = 0, 0
+
+local function argsToString(...)
+    local parts = {}
+    for i = 1, select("#", ...) do
+        local v = select(i, ...)
+        local s = typeof(v) == "Instance" and v:GetFullName() or tostring(v)
+        if #s > 80 then
+            s = s:sub(1, 80) .. "..."
+        end
+        parts[#parts + 1] = typeof(v) .. ":" .. s
+    end
+    return table.concat(parts, ", ")
+end
+
+local function traceLog(msg)
+    local now = os.clock()
+    if
