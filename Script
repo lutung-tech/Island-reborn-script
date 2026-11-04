@@ -1,4 +1,4 @@
--- AUTO FISHING - ISLAND REBORN (v3: deteksi sambaran + mode debug)
+-- AUTO FISHING - ISLAND REBORN (v5: klik HP + deteksi sambaran + mode debug)
 -- Start / Stop GUI
 -- Sinyal sambaran: Attribute "Tug", ikan mendekati bobber, bobber bergeser
 
@@ -83,7 +83,7 @@ corner.Parent = frame
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 30)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH"
+title.Text = "ISLAND AUTO FISH v5"
 title.TextColor3 = Color3.new(1, 1, 1)
 title.TextSize = 16
 title.Font = Enum.Font.GothamBold
@@ -652,4 +652,229 @@ local function fishingLoop(myRun)
         watchTug(bobber)
 
         for _, obj in ipairs(bobber:GetDescendants()) do
-        
+            watchTug(obj)
+        end
+
+        local anc = bobber.Parent
+        while anc and anc ~= folder and anc ~= workspace do
+            watchTug(anc)
+            anc = anc.Parent
+        end
+
+        -- Tunggu sambaran / bobber hilang / dihentikan / timeout
+        local waitStart = os.clock()
+        local settleAt = waitStart + SETTLE_TIME
+        local basePos = nil
+        local lastDebug = 0
+
+        while isActive(myRun) and bobber.Parent and not reeled
+            and os.clock() - waitStart < reelTimeout do
+
+            local now = os.clock()
+
+            if now >= settleAt then
+                -- Sinyal 1: bobber bergeser dari posisi diamnya
+                if USE_MOVEMENT then
+                    local pos = getPos(bobber)
+                    if pos then
+                        if not basePos then
+                            basePos = pos
+                        elseif (pos - basePos).Magnitude >= MOVE_THRESHOLD then
+                            triggerReel("bobber bergeser")
+                        end
+                    end
+                end
+
+                -- Sinyal 2: ikan (bayangan) menempel di bobber
+                if USE_FISH_PROXIMITY and not reeled then
+                    local fish, dist = nearestFish(bobber, folder)
+                    if fish and dist <= BITE_DISTANCE then
+                        triggerReel("ikan dekat kail: " .. fish.Name)
+                    end
+                end
+            end
+
+            if debugOn and now - lastDebug >= 0.25 then
+                lastDebug = now
+                local pos = getPos(bobber)
+                local fish, dist = nearestFish(bobber, folder)
+                dlog(string.format("t=%.2f bobber=%s ikan_terdekat=%s jarak=%s",
+                    now - waitStart,
+                    pos and tostring(pos) or "?",
+                    fish and fish:GetFullName() or "-",
+                    dist and string.format("%.1f", dist) or "-"))
+            end
+
+            task.wait(0.05)
+        end
+
+        if isActive(myRun) and bobber.Parent and not reeled then
+            status.Text = "Status: Timeout, recasting..."
+        end
+
+        -- Tunggu bobber hilang setelah reel (ada batas waktu supaya tidak nyangkut)
+        local goneStart = os.clock()
+        while isActive(myRun) and bobber.Parent
+            and os.clock() - goneStart < goneTimeout do
+            task.wait(0.1)
+        end
+
+        for _, connection in ipairs(connections) do
+            connection:Disconnect()
+        end
+
+        if isActive(myRun) then
+            status.Text = "Status: Next Fishing..."
+            task.wait(0.3)
+        end
+    end
+
+    if runId == myRun then
+        status.Text = "Status: OFF"
+    end
+end
+
+startButton.MouseButton1Click:Connect(function()
+    if running then return end
+
+    runId += 1
+    running = true
+    status.Text = "Status: Starting..."
+
+    task.spawn(fishingLoop, runId)
+end)
+
+stopButton.MouseButton1Click:Connect(function()
+    running = false
+    runId += 1 -- loop lama pasti berhenti, walau START ditekan lagi cepat-cepat
+    status.Text = "Status: STOPPED"
+end)
+
+-- ===== Trace (mode debug): catat apa saja yang berubah di game saat mancing =====
+local traceConnections = {}
+local traceBudget, traceWindowStart = 0, 0
+
+local function argsToString(...)
+    local parts = {}
+    for i = 1, select("#", ...) do
+        local v = select(i, ...)
+        local s = typeof(v) == "Instance" and v:GetFullName() or tostring(v)
+        if #s > 80 then
+            s = s:sub(1, 80) .. "..."
+        end
+        parts[#parts + 1] = typeof(v) .. ":" .. s
+    end
+    return table.concat(parts, ", ")
+end
+
+local function traceLog(msg)
+    local now = os.clock()
+    if now - traceWindowStart >= 1 then
+        traceWindowStart = now
+        traceBudget = 40 -- maksimal 40 baris per detik supaya log tidak banjir
+    end
+    if traceBudget <= 0 then return end
+    traceBudget -= 1
+    dlog(msg)
+end
+
+local function watchAttrs(inst)
+    table.insert(traceConnections, inst.AttributeChanged:Connect(function(name)
+        dlog(string.format("ATTR %s.%s = %s",
+            inst:GetFullName(), name, tostring(inst:GetAttribute(name))))
+    end))
+end
+
+-- true = abaikan (isi karakter pemain lain)
+local function ignoreInstance(inst)
+    local mine = player.Character
+    if mine and inst:IsDescendantOf(mine) then
+        return false
+    end
+    return isInsideAnyCharacter(inst)
+end
+
+local function startTrace()
+    -- 1. RemoteEvent dari server (biasanya di sini game ngasih tau ada sambaran)
+    for _, r in ipairs(ReplicatedStorage:GetDescendants()) do
+        if r:IsA("RemoteEvent") then
+            table.insert(traceConnections, r.OnClientEvent:Connect(function(...)
+                dlog("REMOTE " .. r:GetFullName() .. " (" .. argsToString(...) .. ")")
+            end))
+        end
+    end
+
+    -- 2. Objek baru / hilang di workspace
+    table.insert(traceConnections, workspace.DescendantAdded:Connect(function(inst)
+        if ignoreInstance(inst) then return end
+        traceLog("+workspace " .. inst:GetFullName() .. " [" .. inst.ClassName .. "]")
+    end))
+    table.insert(traceConnections, workspace.DescendantRemoving:Connect(function(inst)
+        if ignoreInstance(inst) then return end
+        traceLog("-workspace " .. inst:GetFullName() .. " [" .. inst.ClassName .. "]")
+    end))
+
+    -- 3. UI baru di PlayerGui (indikator sambaran, minigame, dll)
+    local pg = player:FindFirstChildOfClass("PlayerGui")
+    if pg then
+        table.insert(traceConnections, pg.DescendantAdded:Connect(function(inst)
+            if inst:IsDescendantOf(gui) then return end
+            traceLog("+gui " .. inst:GetFullName() .. " [" .. inst.ClassName .. "]")
+        end))
+    end
+
+    -- 4. Perubahan attribute di player, karakter, dan pancing yang dipegang
+    watchAttrs(player)
+    local char = player.Character
+    if char then
+        watchAttrs(char)
+        for _, d in ipairs(char:GetDescendants()) do
+            if d:IsA("Tool") or d:IsA("Humanoid") then
+                watchAttrs(d)
+            end
+        end
+    end
+
+    -- 5. Tanda kapan layar diketuk (oleh script atau oleh lu sendiri)
+    table.insert(traceConnections, UIS.InputBegan:Connect(function(input, processed)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dlog("INPUT ketuk layar (processed=" .. tostring(processed) .. ")")
+        end
+    end))
+end
+
+local function stopTrace()
+    for _, c in ipairs(traceConnections) do
+        c:Disconnect()
+    end
+    traceConnections = {}
+end
+
+debugButton.MouseButton1Click:Connect(function()
+    debugOn = not debugOn
+
+    if debugOn then
+        debugLines = {}
+        startTrace()
+        debugButton.Text = "DEBUG: ON (klik lagi = salin log)"
+        status.Text = "Status: merekam log..."
+    else
+        stopTrace()
+        debugButton.Text = "DEBUG: OFF"
+        flushLog()
+    end
+end)
+
+modeButton.MouseButton1Click:Connect(function()
+    local idx = table.find(CLICK_MODES, clickMode) or 1
+    clickMode = CLICK_MODES[idx % #CLICK_MODES + 1]
+    modeButton.Text = "MODE: " .. clickMode
+end)
+
+testButton.MouseButton1Click:Connect(function()
+    status.Text = "Status: tes klik (" .. clickMode .. ")"
+    task.spawn(click)
+end)
+
+-- ===== AKHIR SCRIPT v5 (kalau baris ini tidak ada di akhir file, filenya kepotong) =====
