@@ -1,8 +1,68 @@
-print("--- MULAI SCAN NAMA SLIME ---")
-for _, v in pairs(workspace:GetDescendants()) do
-    -- Cari objek yang mengandung kata "slime" atau model mob
-    if string.find(string.lower(v.Name), "slime") then
-        print("Ketemu Objek Slime:", v.Name, "| Jenis:", v.ClassName, "| Parent:", v.Parent.Name)
+-- Script Auto Farm Slime Final - Roblox Islands
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Workspace = game:GetService("Workspace")
+
+print("[Auto Farm] Berhasil terhubung ke folder Entities!")
+
+-- Fungsi spesifik mencari slime di dalam folder Entities
+local function getSlimeTarget()
+    local entitiesFolder = Workspace:FindFirstChild("Entities")
+    if entitiesFolder then
+        for _, obj in pairs(entitiesFolder:GetChildren()) do
+            if string.lower(obj.Name) == "slime" then
+                local hrp = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("PrimaryPart") or obj:FindFirstChild("InnerSlime")
+                local hum = obj:FindFirstChildOfClass("Humanoid")
+                
+                -- Cek jika punya Humanoid dan masih hidup
+                if hrp then
+                    if hum and hum.Health <= 0 then
+                        continue
+                    end
+                    return hrp
+                end
+            end
+        end
     end
+    
+    -- Cadangan pencarian menyeluruh jika Entities sedang kosong/bergeser
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj.Name == "slime" and obj:IsA("Model") then
+            local hrp = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("PrimaryPart")
+            local hum = obj:FindFirstChildOfClass("Humanoid")
+            if hrp and (not hum or hum.Health > 0) then
+                return hrp
+            end
+        end
+    end
+    
+    return nil
 end
-print("--- SELESAI SCAN ---")
+
+-- Loop Utama Auto Farm & Attack
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char and char:FindFirstChild("HumanoidRootPart") then
+                local targetHrp = getSlimeTarget()
+                if targetHrp then
+                    -- Teleport melayang tepat di atas slime
+                    char.HumanoidRootPart.CFrame = targetHrp.CFrame * CFrame.new(0, 4, 0)
+                    
+                    -- Otomatis ambil & aktifkan senjata
+                    local tool = char:FindFirstChildOfClass("Tool")
+                    if not tool then
+                        local backpackTool = LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
+                        if backpackTool then
+                            backpackTool.Parent = char
+                        end
+                    else
+                        tool:Activate()
+                    end
+                end
+            end
+        end)
+    end
+end)
