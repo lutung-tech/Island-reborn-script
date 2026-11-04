@@ -1,4 +1,4 @@
--- AUTO FISHING - ISLAND REBORN (v20: Fixed UI Layout & Clean Scale)
+-- AUTO FISHING - ISLAND REBORN (v21: Fresh Clean GUI & Fixed Layout)
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
@@ -11,11 +11,12 @@ local clickDelay = 0.15
 local fishingDuration = 4.8    
 local postReelWait = 1.5       
 
--- Hapus GUI lama agar bersih dari error
-pcall(function()
-    local old = playerGui:FindFirstChild("IslandAutoFish")
-    if old then old:Destroy() end
-end)
+-- Hapus SEMUA GUI lama yang mungkin nyangkut di PlayerGui
+for _, guiObj in ipairs(playerGui:GetChildren()) do
+    if guiObj.Name == "IslandAutoFish" or guiObj.Name == "IslandAutoFish_v20" then
+        guiObj:Destroy()
+    end
+end
 
 local running = false
 local runId = 0 
@@ -25,7 +26,7 @@ local function isActive(id)
     return running and runId == id
 end
 
--- ===== GUI Responsive =====
+-- ===== GUI Baru (Bersih dari Sisa Cache Lama) =====
 local gui = Instance.new("ScreenGui")
 gui.Name = "IslandAutoFish"
 gui.ResetOnSpawn = false
@@ -33,10 +34,9 @@ gui.IgnoreGuiInset = true
 gui.Parent = playerGui
 
 local frame = Instance.new("Frame")
--- Menggunakan Scale agar ukurannya pas menyesuaikan layar HP
-frame.Size = UDim2.new(0, 240, 0, 130)
-frame.Position = UDim2.new(0.5, -120, 0.3, -65)
-frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+frame.Size = UDim2.fromOffset(230, 130)
+frame.Position = UDim2.new(0.5, -115, 0.35, -65)
+frame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
 frame.BorderSizePixel = 0
 frame.Parent = gui
 
@@ -47,25 +47,26 @@ corner.Parent = frame
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 35)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH v20"
+title.Text = "ISLAND AUTO FISH v21"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
 title.Parent = frame
 
 local status = Instance.new("TextLabel")
-status.Position = UDim2.new(0, 10, 0, 38)
-status.Size = UDim2.new(1, -20, 0, 25)
+status.Position = UDim2.new(0, 12, 0, 38)
+status.Size = UDim2.new(1, -24, 0, 25)
 status.BackgroundTransparency = 1
 status.Text = "Status: OFF"
 status.TextColor3 = Color3.fromRGB(180, 180, 180)
 status.TextSize = 12
 status.Font = Enum.Font.Gotham
+status.TextXAlignment = Enum.TextXAlignment.Left
 status.Parent = frame
 
 local startButton = Instance.new("TextButton")
-startButton.Position = UDim2.new(0, 10, 0, 75)
-startButton.Size = UDim2.new(0.5, -15, 0, 40)
+startButton.Position = UDim2.new(0, 12, 0, 75)
+startButton.Size = UDim2.new(0.5, -16, 0, 40)
 startButton.Text = "START"
 startButton.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
 startButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -78,8 +79,8 @@ startCorner.CornerRadius = UDim.new(0, 6)
 startCorner.Parent = startButton
 
 local stopButton = Instance.new("TextButton")
-stopButton.Position = UDim2.new(0.5, 5, 0, 75)
-stopButton.Size = UDim2.new(0.5, -15, 0, 40)
+stopButton.Position = UDim2.new(0.5, 4, 0, 75)
+stopButton.Size = UDim2.new(0.5, -16, 0, 40)
 stopButton.Text = "STOP"
 stopButton.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
 stopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
