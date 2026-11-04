@@ -1,4 +1,4 @@
--- AUTO FISHING - ISLAND REBORN (v7: Fix Premature Reel & Sound Filtering)
+-- AUTO FISHING - ISLAND REBORN (v8: Ultra Safe Delay & Smart Bite Detection)
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
@@ -6,12 +6,12 @@ local CoreGui = game:GetService("CoreGui")
 
 local player = Players.LocalPlayer
 
--- ===== Config (Dapat disesuaikan) =====
-local clickDelay = 0.15        -- Lama tombol/layar ditahan saat diklik
-local castTimeout = 10         -- Toleransi waktu tunggu kail masuk air
-local biteTimeout = 45         -- Batas maksimal tunggu ikan menyambar
-local settleDelay = 2.0        -- Waktu jeda agar kail tenang di air SEBELUM mulai mendeteksi sambaran
-local postReelWait = 2.0       -- Waktu tunggu animasi menangkap ikan selesai sebelum cast ulang
+-- ===== Config =====
+local clickDelay = 0.15        -- Lama tombol ditahan
+local castTimeout = 10         -- Toleransi waktu lempar
+local biteTimeout = 45         -- Maksimal tunggu ikan
+local settleDelay = 4.5        -- Jeda aman agar kail benar-benar tenang & animasi lempar selesai
+local postReelWait = 2.0       -- Jeda setelah narik ikan
 
 -- ===== Parent GUI =====
 local function getGuiParent()
@@ -57,7 +57,7 @@ corner.Parent = frame
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 30)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH v7"
+title.Text = "ISLAND AUTO FISH v8"
 title.TextColor3 = Color3.new(1, 1, 1)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
@@ -116,7 +116,7 @@ gui.Destroying:Connect(function()
     for _, c in ipairs(uiConnections) do c:Disconnect() end
 end)
 
--- ===== Simulator Tap Layar (Khusus HP / Universal) =====
+-- ===== Simulator Tap Layar =====
 local function insideFrame(x, y)
     local p, s = frame.AbsolutePosition, frame.AbsoluteSize
     return x >= p.X and x <= p.X + s.X and y >= p.Y and y <= p.Y + s.Y
@@ -140,7 +140,7 @@ local function tapScreen()
     end)
 end
 
--- ===== Fungsi Utama Loop Mancing =====
+-- ===== Loop Utama Mancing =====
 local function fishingLoop(myRun)
     while isActive(myRun) do
         status.Text = "Status: Melempar Kail..."
@@ -155,9 +155,7 @@ local function fishingLoop(myRun)
         while isActive(myRun) and (os.clock() - startWait < castTimeout) do
             if terrain then
                 emitter = terrain:FindFirstChild("SoundEmitter")
-                if emitter and emitter:FindFirstChild("fishing_rod_splash") then
-                    break
-                end
+                if emitter then break end
             end
             task.wait(0.1)
         end
@@ -165,13 +163,12 @@ local function fishingLoop(myRun)
         if not isActive(myRun) then break end
         
         if not emitter then
-            status.Text = "Status: Kail Gagal Masuk Air, Mengulang..."
+            status.Text = "Status: Kail Gagal, Mengulang..."
             task.wait(1)
             continue
         end
         
-        -- Tahap 2: Jeda penenang (Settle Delay)
-        -- Bagian ini mencegah suara cipratan awal lemparan terdeteksi sebagai sambaran ikan
+        -- Tahap 2: Settle Delay (Wajib agar cipratan awal lemparan terlewati)
         status.Text = "Status: Menunggu Kail Tenang..."
         local settleStart = os.clock()
         while isActive(myRun) and (os.clock() - settleStart < settleDelay) do
@@ -182,21 +179,23 @@ local function fishingLoop(myRun)
         
         status.Text = "Status: Menunggu Ikan Menyambar..."
         
-        -- Tahap 3: Pantau sambaran ikan dengan filter suara
+        -- Tahap 3: Deteksi suara sambaran yang valid
         local fishBited = false
         local biteConnection = nil
         
         biteConnection = emitter.ChildAdded:Connect(function(child)
             if child:IsA("Sound") then
                 local sName = child.Name:lower()
-                -- Abaikan suara lemparan/cipratan awal, cari suara spesifik sambaran ikan
-                if sName ~= "fishing_rod_splash" and not sName:find("cast") and not sName:find("equip") then
+                -- Cetak ke F9/Console game untuk memantau nama suara jika diperlukan
+                print("[AutoFish Sound]:", sName)
+                
+                -- Kata kunci suara yang biasanya menandakan ikan menyambar atau kail ditarik
+                if sName:find("bite") or sName:find("hook") or sName:find("catch") or sName:find("reel") or sName:find("success") or (sName ~= "fishing_rod_splash" and not sName:find("cast")) then
                     fishBited = true
                 end
             end
         end)
         
-        -- Loop tunggu sampai ada suara sambaran atau terkena timeout
         local biteStart = os.clock()
         while isActive(myRun) and not fishBited and (os.clock() - biteStart < biteTimeout) do
             if not emitter.Parent then break end
@@ -207,14 +206,14 @@ local function fishingLoop(myRun)
         
         if not isActive(myRun) then break end
         
-        -- Tahap 4: Eksekusi penarikan kail
+        -- Tahap 4: Eksekusi
         if fishBited then
             status.Text = "Status: STRIKE! Narik Ikan..."
             tapScreen()
-            task.wait(postReelWait) -- Menunggu animasi selesai
+            task.wait(postReelWait)
         else
-            status.Text = "Status: Timeout/Luput, Mengulang..."
-            tapScreen() -- Tarik kail kosong untuk reset
+            status.Text = "Status: Timeout, Mengulang..."
+            tapScreen()
             task.wait(1.5)
         end
     end
@@ -224,7 +223,7 @@ local function fishingLoop(myRun)
     end
 end
 
--- ===== Event Tombol GUI =====
+-- ===== Tombol =====
 startButton.MouseButton1Click:Connect(function()
     if running then return end
     runId = runId + 1
