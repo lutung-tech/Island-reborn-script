@@ -1,6 +1,4 @@
--- AUTO FISHING - ISLAND REBORN (v6: Sistem Deteksi Sound-Hook & Anti-Obfuscation)
--- Menggunakan deteksi instance sound emitter langsung dari log debug lu
-
+-- AUTO FISHING - ISLAND REBORN (v7: Fix Premature Reel & Sound Filtering)
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
@@ -8,11 +6,12 @@ local CoreGui = game:GetService("CoreGui")
 
 local player = Players.LocalPlayer
 
--- ===== Config =====
-local clickDelay = 0.15        -- lama tombol mouse ditahan
-local castTimeout = 10         -- toleransi tunggu kail masuk air
-local biteTimeout = 45         -- tunggu sambaran maksimal sebelum cast ulang
-local postReelWait = 2.0       -- tunggu animasi narik ikan selesai sebelum cast lagi
+-- ===== Config (Dapat disesuaikan) =====
+local clickDelay = 0.15        -- Lama tombol/layar ditahan saat diklik
+local castTimeout = 10         -- Toleransi waktu tunggu kail masuk air
+local biteTimeout = 45         -- Batas maksimal tunggu ikan menyambar
+local settleDelay = 2.0        -- Waktu jeda agar kail tenang di air SEBELUM mulai mendeteksi sambaran
+local postReelWait = 2.0       -- Waktu tunggu animasi menangkap ikan selesai sebelum cast ulang
 
 -- ===== Parent GUI =====
 local function getGuiParent()
@@ -58,7 +57,7 @@ corner.Parent = frame
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 30)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH v6"
+title.Text = "ISLAND AUTO FISH v7"
 title.TextColor3 = Color3.new(1, 1, 1)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
@@ -112,11 +111,12 @@ do
 end
 
 gui.Destroying:Connect(function()
-    running = false runId += 1
+    running = false 
+    runId = runId + 1
     for _, c in ipairs(uiConnections) do c:Disconnect() end
 end)
 
--- ===== Simulator Tap Layar (Khusus HP) =====
+-- ===== Simulator Tap Layar (Khusus HP / Universal) =====
 local function insideFrame(x, y)
     local p, s = frame.AbsolutePosition, frame.AbsoluteSize
     return x >= p.X and x <= p.X + s.X and y >= p.Y and y <= p.Y + s.Y
@@ -126,7 +126,6 @@ local function tapScreen()
     local cam = workspace.CurrentCamera
     local vs = cam and cam.ViewportSize or Vector2.new(800, 600)
     
-    -- Cari titik tengah layar aman di luar GUI script
     local tx, ty = vs.X * 0.5, vs.Y * 0.5
     if insideFrame(tx, ty) then
         tx = vs.X * 0.5
@@ -135,9 +134,9 @@ local function tapScreen()
 
     local touchId = 9
     pcall(function()
-        VIM:SendTouchEvent(touchId, 0, tx, ty) -- Tekan layar
+        VIM:SendTouchEvent(touchId, 0, tx, ty) 
         task.wait(clickDelay)
-        VIM:SendTouchEvent(touchId, 2, tx, ty) -- Lepas layar
+        VIM:SendTouchEvent(touchId, 2, tx, ty) 
     end)
 end
 
@@ -147,7 +146,7 @@ local function fishingLoop(myRun)
         status.Text = "Status: Melempar Kail..."
         tapScreen()
         
-        -- Tahap 1: Tunggu kail masuk air (ditandai munculnya objek SoundEmitter)
+        -- Tahap 1: Tunggu kail masuk air
         status.Text = "Status: Menunggu Kail Masuk Air..."
         local terrain = workspace:WaitForChild("Terrain", 5)
         local emitter = nil
@@ -166,27 +165,40 @@ local function fishingLoop(myRun)
         if not isActive(myRun) then break end
         
         if not emitter then
-            status.Text = "Status: Kail Gagal Masuk Air, Mencoba Lagi..."
+            status.Text = "Status: Kail Gagal Masuk Air, Mengulang..."
             task.wait(1)
             continue
         end
         
-        status.Text = "Status: Kail di Air. Menunggu Ikan..."
+        -- Tahap 2: Jeda penenang (Settle Delay)
+        -- Bagian ini mencegah suara cipratan awal lemparan terdeteksi sebagai sambaran ikan
+        status.Text = "Status: Menunggu Kail Tenang..."
+        local settleStart = os.clock()
+        while isActive(myRun) and (os.clock() - settleStart < settleDelay) do
+            task.wait(0.05)
+        end
         
-        -- Tahap 2: Pantau sambaran ikan lewat sound effect baru
+        if not isActive(myRun) then break end
+        
+        status.Text = "Status: Menunggu Ikan Menyambar..."
+        
+        -- Tahap 3: Pantau sambaran ikan dengan filter suara
         local fishBited = false
         local biteConnection = nil
         
         biteConnection = emitter.ChildAdded:Connect(function(child)
-            if child:IsA("Sound") and child.Name ~= "fishing_rod_splash" then
-                fishBited = true
+            if child:IsA("Sound") then
+                local sName = child.Name:lower()
+                -- Abaikan suara lemparan/cipratan awal, cari suara spesifik sambaran ikan
+                if sName ~= "fishing_rod_splash" and not sName:find("cast") and not sName:find("equip") then
+                    fishBited = true
+                end
             end
         end)
         
-        -- Loop tunggu sampai sound sambaran ke-trigger atau timeout
+        -- Loop tunggu sampai ada suara sambaran atau terkena timeout
         local biteStart = os.clock()
         while isActive(myRun) and not fishBited and (os.clock() - biteStart < biteTimeout) do
-            -- Proteksi tambahan jika SoundEmitter mendadak dihapus game sebelum sambaran
             if not emitter.Parent then break end
             task.wait(0.05)
         end
@@ -195,14 +207,14 @@ local function fishingLoop(myRun)
         
         if not isActive(myRun) then break end
         
-        -- Tahap 3: Eksekusi penarikan kail
+        -- Tahap 4: Eksekusi penarikan kail
         if fishBited then
-            status.Text = "Status: STRIKE! Narik Kail..."
+            status.Text = "Status: STRIKE! Narik Ikan..."
             tapScreen()
-            task.wait(postReelWait) -- Waktu tunggu animasi menangkap ikan selesai
+            task.wait(postReelWait) -- Menunggu animasi selesai
         else
             status.Text = "Status: Timeout/Luput, Mengulang..."
-            tapScreen() -- Tarik kail kosong
+            tapScreen() -- Tarik kail kosong untuk reset
             task.wait(1.5)
         end
     end
@@ -215,13 +227,13 @@ end
 -- ===== Event Tombol GUI =====
 startButton.MouseButton1Click:Connect(function()
     if running then return end
-    runId += 1
+    runId = runId + 1
     running = true
     task.spawn(fishingLoop, runId)
 end)
 
 stopButton.MouseButton1Click:Connect(function()
     running = false
-    runId += 1
+    runId = runId + 1
     status.Text = "Status: STOPPED"
 end)
