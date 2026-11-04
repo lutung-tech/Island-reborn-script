@@ -6,6 +6,7 @@ local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
 local CoreGui = game:GetService("CoreGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 
@@ -194,15 +195,77 @@ local function dlog(msg)
     end
 end
 
+-- Jendela log (dipakai kalau executor tidak punya setclipboard)
+local logWindow, logBox
+
+local function showLogWindow(text)
+    if not logWindow then
+        logWindow = Instance.new("Frame")
+        logWindow.Size = UDim2.fromOffset(320, 230)
+        logWindow.Position = UDim2.new(0.5, -160, 0.5, -115)
+        logWindow.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+        logWindow.ZIndex = 5
+        logWindow.Parent = gui
+
+        local scroll = Instance.new("ScrollingFrame")
+        scroll.Size = UDim2.new(1, -10, 1, -45)
+        scroll.Position = UDim2.fromOffset(5, 5)
+        scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+        scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        scroll.ScrollBarThickness = 6
+        scroll.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        scroll.ZIndex = 6
+        scroll.Parent = logWindow
+
+        logBox = Instance.new("TextBox")
+        logBox.Size = UDim2.new(1, -8, 0, 0)
+        logBox.AutomaticSize = Enum.AutomaticSize.Y
+        logBox.BackgroundTransparency = 1
+        logBox.TextColor3 = Color3.new(1, 1, 1)
+        logBox.TextSize = 11
+        logBox.Font = Enum.Font.Code
+        logBox.TextXAlignment = Enum.TextXAlignment.Left
+        logBox.TextYAlignment = Enum.TextYAlignment.Top
+        logBox.MultiLine = true
+        logBox.TextWrapped = true
+        logBox.ClearTextOnFocus = false
+        logBox.ZIndex = 7
+        logBox.Parent = scroll
+
+        local close = Instance.new("TextButton")
+        close.Size = UDim2.new(1, -10, 0, 30)
+        close.Position = UDim2.new(0, 5, 1, -35)
+        close.Text = "TUTUP"
+        close.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
+        close.TextColor3 = Color3.new(1, 1, 1)
+        close.ZIndex = 6
+        close.Parent = logWindow
+        close.MouseButton1Click:Connect(function()
+            logWindow.Visible = false
+        end)
+    end
+
+    logBox.Text = text
+    logWindow.Visible = true
+end
+
 local function flushLog()
     local text = table.concat(debugLines, "\n")
     local ok = pcall(function()
-        setclipboard(text)
+        if setclipboard then
+            setclipboard(text)
+        elseif toclipboard then
+            toclipboard(text)
+        else
+            error("tidak ada fungsi clipboard")
+        end
     end)
+
     if ok then
         status.Text = "Status: log disalin ke clipboard"
     else
-        status.Text = "Status: log dicetak ke console (F9)"
+        status.Text = "Status: log ditampilkan, salin manual"
+        showLogWindow(text)
         print(text)
     end
 end
@@ -509,6 +572,26 @@ local function fishingLoop(myRun)
         if not bobber then
             status.Text = "Status: Bobber not found"
             dlog("bobber tidak ketemu setelah cast")
+
+            if debugOn then
+                local f = getFolder()
+                if f then
+                    dlog("workspace.FishingBobbers ada, isi " .. #f:GetChildren() .. " objek")
+                    for _, c in ipairs(f:GetChildren()) do
+                        dlog("  " .. c:GetFullName() .. " [" .. c.ClassName .. "]")
+                        dumpAttrs(c)
+                    end
+                else
+                    dlog("workspace.FishingBobbers TIDAK ADA. Isi workspace:")
+                    local n = 0
+                    for _, c in ipairs(workspace:GetChildren()) do
+                        n += 1
+                        if n > 60 then break end
+                        dlog("  " .. c.Name .. " [" .. c.ClassName .. "]")
+                    end
+                end
+            end
+
             task.wait(0.5)
             continue
         end
@@ -569,98 +652,4 @@ local function fishingLoop(myRun)
         watchTug(bobber)
 
         for _, obj in ipairs(bobber:GetDescendants()) do
-            watchTug(obj)
-        end
-
-        local anc = bobber.Parent
-        while anc and anc ~= folder and anc ~= workspace do
-            watchTug(anc)
-            anc = anc.Parent
-        end
-
-        -- Tunggu sambaran / bobber hilang / dihentikan / timeout
-        local waitStart = os.clock()
-        local settleAt = waitStart + SETTLE_TIME
-        local basePos = nil
-        local lastDebug = 0
-
-        while isActive(myRun) and bobber.Parent and not reeled
-            and os.clock() - waitStart < reelTimeout do
-
-            local now = os.clock()
-
-            if now >= settleAt then
-                -- Sinyal 1: bobber bergeser dari posisi diamnya
-                if USE_MOVEMENT then
-                    local pos = getPos(bobber)
-                    if pos then
-                        if not basePos then
-                            basePos = pos
-                        elseif (pos - basePos).Magnitude >= MOVE_THRESHOLD then
-                            triggerReel("bobber bergeser")
-                        end
-                    end
-                end
-
-                -- Sinyal 2: ikan (bayangan) menempel di bobber
-                if USE_FISH_PROXIMITY and not reeled then
-                    local fish, dist = nearestFish(bobber, folder)
-                    if fish and dist <= BITE_DISTANCE then
-                        triggerReel("ikan dekat kail: " .. fish.Name)
-                    end
-                end
-            end
-
-            if debugOn and now - lastDebug >= 0.25 then
-                lastDebug = now
-                local pos = getPos(bobber)
-                local fish, dist = nearestFish(bobber, folder)
-                dlog(string.format("t=%.2f bobber=%s ikan_terdekat=%s jarak=%s",
-                    now - waitStart,
-                    pos and tostring(pos) or "?",
-                    fish and fish:GetFullName() or "-",
-                    dist and string.format("%.1f", dist) or "-"))
-            end
-
-            task.wait(0.05)
-        end
-
-        if isActive(myRun) and bobber.Parent and not reeled then
-            status.Text = "Status: Timeout, recasting..."
-        end
-
-        -- Tunggu bobber hilang setelah reel (ada batas waktu supaya tidak nyangkut)
-        local goneStart = os.clock()
-        while isActive(myRun) and bobber.Parent
-            and os.clock() - goneStart < goneTimeout do
-            task.wait(0.1)
-        end
-
-        for _, connection in ipairs(connections) do
-            connection:Disconnect()
-        end
-
-        if isActive(myRun) then
-            status.Text = "Status: Next Fishing..."
-            task.wait(0.3)
-        end
-    end
-
-    if runId == myRun then
-        status.Text = "Status: OFF"
-    end
-end
-
-startButton.MouseButton1Click:Connect(function()
-    if running then return end
-
-    runId += 1
-    running = true
-    status.Text = "Status: Starting..."
-
-    task.spawn(fishingLoop, runId)
-end)
-
-stopButton.MouseButton1Click:Connect(function()
-    running = false
-    runId += 1 -- loop lama
+        
