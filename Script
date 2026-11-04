@@ -1,4 +1,4 @@
--- AUTO FISHING - ISLAND REBORN (v8: Ultra Safe Delay & Smart Bite Detection)
+-- AUTO FISHING - ISLAND REBORN (v10: Precise Attribute & Tug Detection)
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local VIM = game:GetService("VirtualInputManager")
@@ -9,8 +9,8 @@ local player = Players.LocalPlayer
 -- ===== Config =====
 local clickDelay = 0.15        -- Lama tombol ditahan
 local castTimeout = 10         -- Toleransi waktu lempar
-local biteTimeout = 45         -- Maksimal tunggu ikan
-local settleDelay = 4.5        -- Jeda aman agar kail benar-benar tenang & animasi lempar selesai
+local biteTimeout = 45         -- Maksimal tunggu ikan menyambar
+local settleDelay = 3.0        -- Jeda awal agar kail tenang
 local postReelWait = 2.0       -- Jeda setelah narik ikan
 
 -- ===== Parent GUI =====
@@ -57,7 +57,7 @@ corner.Parent = frame
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 30)
 title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH v8"
+title.Text = "ISLAND AUTO FISH v10"
 title.TextColor3 = Color3.new(1, 1, 1)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
@@ -140,36 +140,51 @@ local function tapScreen()
     end)
 end
 
+-- Cari folder bobber pemain
+local function getBobberFolder()
+    return workspace:FindFirstChild("FishingBobbers")
+end
+
+-- Cari objek bobber aktif di workspace
+local function findMyBobber()
+    local folder = getBobberFolder()
+    if not folder then return nil end
+    
+    for _, obj in ipairs(folder:GetChildren()) do
+        if obj:IsA("BasePart") or obj:IsA("Model") then
+            return obj
+        end
+    end
+    return nil
+end
+
 -- ===== Loop Utama Mancing =====
 local function fishingLoop(myRun)
     while isActive(myRun) do
         status.Text = "Status: Melempar Kail..."
         tapScreen()
         
-        -- Tahap 1: Tunggu kail masuk air
-        status.Text = "Status: Menunggu Kail Masuk Air..."
-        local terrain = workspace:WaitForChild("Terrain", 5)
-        local emitter = nil
+        -- Tahap 1: Tunggu sampai bobber/kail muncul di workspace
+        status.Text = "Status: Menunggu Kail Muncul..."
+        local bobber = nil
         local startWait = os.clock()
         
         while isActive(myRun) and (os.clock() - startWait < castTimeout) do
-            if terrain then
-                emitter = terrain:FindFirstChild("SoundEmitter")
-                if emitter then break end
-            end
+            bobber = findMyBobber()
+            if bobber then break end
             task.wait(0.1)
         end
         
         if not isActive(myRun) then break end
         
-        if not emitter then
+        if not bobber then
             status.Text = "Status: Kail Gagal, Mengulang..."
             task.wait(1)
             continue
         end
         
-        -- Tahap 2: Settle Delay (Wajib agar cipratan awal lemparan terlewati)
-        status.Text = "Status: Menunggu Kail Tenang..."
+        -- Tahap 2: Settle Delay (Agar kail stabil di air & lemparan selesai)
+        status.Text = "Status: Menunggu Kail Stabil..."
         local settleStart = os.clock()
         while isActive(myRun) and (os.clock() - settleStart < settleDelay) do
             task.wait(0.05)
@@ -179,34 +194,61 @@ local function fishingLoop(myRun)
         
         status.Text = "Status: Menunggu Ikan Menyambar..."
         
-        -- Tahap 3: Deteksi suara sambaran yang valid
+        -- Tahap 3: Deteksi Sambaran Akurat (Lewat Attribute 'Tug' atau Pergerakan Signifikan)
         local fishBited = false
-        local biteConnection = nil
+        local connection = nil
+        local initialPos = nil
         
-        biteConnection = emitter.ChildAdded:Connect(function(child)
-            if child:IsA("Sound") then
-                local sName = child.Name:lower()
-                -- Cetak ke F9/Console game untuk memantau nama suara jika diperlukan
-                print("[AutoFish Sound]:", sName)
-                
-                -- Kata kunci suara yang biasanya menandakan ikan menyambar atau kail ditarik
-                if sName:find("bite") or sName:find("hook") or sName:find("catch") or sName:find("reel") or sName:find("success") or (sName ~= "fishing_rod_splash" and not sName:find("cast")) then
+        if bobber:IsA("BasePart") then
+            initialPos = bobber.Position
+        elseif bobber:IsA("Model") and bobber.PrimaryPart then
+            initialPos = bobber.PrimaryPart.Position
+        end
+        
+        -- Pantau perubahan atribut 'Tug' jika ada dari game
+        connection = bobber.AttributeChanged:Connect(function(attrName)
+            if attrName:lower() == "tug" then
+                local val = bobber:GetAttribute(attrName)
+                if val == true or (typeof(val) == "number" and val > 0) then
                     fishBited = true
                 end
             end
         end)
         
+        -- Loop pemantauan sambaran (Cek atribut dan pergeseran posisi bobber akibat ditarik ikan)
         local biteStart = os.clock()
         while isActive(myRun) and not fishBited and (os.clock() - biteStart < biteTimeout) do
-            if not emitter.Parent then break end
+            if not bobber.Parent then break end
+            
+            -- Cek apakah atribut Tug bernilai true secara langsung
+            if bobber:GetAttribute("Tug") == true then
+                fishBited = true
+                break
+            end
+            
+            -- Cek pergeseran posisi bobber yang drastis (tanda ikan menarik kail)
+            if initialPos then
+                local currentPos = nil
+                if bobber:IsA("BasePart") then
+                    currentPos = bobber.Position
+                elseif bobber:IsA("Model") and bobber.PrimaryPart then
+                    currentPos = bobber.PrimaryPart.Position
+                end
+                
+                if currentPos and (currentPos - initialPos).Magnitude > 2.0 then
+                    fishBited = true
+                    break
+                end
+            end
+            
             task.wait(0.05)
         end
         
-        if biteConnection then biteConnection:Disconnect() end
+        if connection then connection:Disconnect() end
         
         if not isActive(myRun) then break end
         
-        -- Tahap 4: Eksekusi
+        -- Tahap 4: Eksekusi Narik Ikan
         if fishBited then
             status.Text = "Status: STRIKE! Narik Ikan..."
             tapScreen()
