@@ -1,105 +1,49 @@
-
 -- AUTO FISHING - ISLAND REBORN
--- Start / Stop GUI
--- Deteksi Bobber dan Attribute Tug
+-- Upload this file to GitHub, then use its Raw URL in your executor.
 
 local Players = game:GetService("Players")
-local UIS = game:GetService("UserInputService")
-local VIM = game:GetService("VirtualInputManager")
-local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local player = Players.LocalPlayer
-
--- Hentikan GUI lama jika ada
-pcall(function()
-    local old = (gethui and gethui() or CoreGui):FindFirstChild("IslandAutoFish")
-    if old then old:Destroy() end
-end)
-
 local running = false
-local clickDelay = 0.15
-local bobberTimeout = 15
+local gui
 
--- GUI
-local gui = Instance.new("ScreenGui")
-gui.Name = "IslandAutoFish"
-gui.ResetOnSpawn = false
-
-local parent = CoreGui
-pcall(function()
-    if gethui then parent = gethui() end
-end)
-
-gui.Parent = parent
-
-local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(210, 125)
-frame.Position = UDim2.new(0.5, -105, 0.5, -62)
-frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-frame.Parent = gui
-
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 8)
-corner.Parent = frame
-
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 30)
-title.BackgroundTransparency = 1
-title.Text = "ISLAND AUTO FISH"
-title.TextColor3 = Color3.new(1, 1, 1)
-title.TextSize = 16
-title.Font = Enum.Font.GothamBold
-title.Parent = frame
-
-local status = Instance.new("TextLabel")
-status.Position = UDim2.fromOffset(5, 35)
-status.Size = UDim2.new(1, -10, 0, 25)
-status.BackgroundTransparency = 1
-status.Text = "Status: OFF"
-status.TextColor3 = Color3.fromRGB(220, 220, 220)
-status.TextSize = 12
-status.Parent = frame
-
-local startButton = Instance.new("TextButton")
-startButton.Position = UDim2.fromOffset(10, 75)
-startButton.Size = UDim2.fromOffset(90, 35)
-startButton.Text = "START"
-startButton.BackgroundColor3 = Color3.fromRGB(30, 150, 70)
-startButton.TextColor3 = Color3.new(1, 1, 1)
-startButton.Parent = frame
-
-local stopButton = Instance.new("TextButton")
-stopButton.Position = UDim2.fromOffset(110, 75)
-stopButton.Size = UDim2.fromOffset(90, 35)
-stopButton.Text = "STOP"
-stopButton.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
-stopButton.TextColor3 = Color3.new(1, 1, 1)
-stopButton.Parent = frame
-
--- Fungsi klik
 local function click()
-    local pos = UIS:GetMouseLocation()
-    VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0)
-    task.wait(clickDelay)
-    VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
+    pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    end)
 end
 
--- Cari folder Bobber
-local function getFolder()
+local function getBobberFolder()
     return workspace:FindFirstChild("FishingBobbers")
 end
 
--- Cari Bobber berdasarkan Attribute Tug atau nama
+local function hasTugSignal(obj)
+    local ok, value = pcall(function()
+        return obj:GetAttribute("Tug")
+    end)
+    return ok and value ~= nil
+end
+
 local function findBobber()
-    local folder = getFolder()
-    if not folder then return nil end
+    local folder = getBobberFolder()
+    if not folder then
+        return nil
+    end
 
+    -- Prefer objects that already expose the Tug attribute.
     for _, obj in ipairs(folder:GetDescendants()) do
-        local hasTug = obj:GetAttribute("Tug") ~= nil
-        local bobberName =
-            obj.Name:lower():find("bobber") ~= nil
+        if hasTugSignal(obj) then
+            return obj
+        end
+    end
 
-        if hasTug or (bobberName and obj:IsA("BasePart")) then
+    -- Fallback: find a bobber-named part/model.
+    for _, obj in ipairs(folder:GetDescendants()) do
+        if string.find(string.lower(obj.Name), "bobber", 1, true) then
             return obj
         end
     end
@@ -107,120 +51,189 @@ local function findBobber()
     return nil
 end
 
--- Tunggu Bobber tanpa retry terlalu cepat
-local function waitForBobber()
-    local start = os.clock()
-
-    while running and os.clock() - start < bobberTimeout do
-        local bobber = findBobber()
-
-        if bobber then
-            return bobber
+local function getTugValue(obj)
+    local current = obj
+    while current do
+        local ok, value = pcall(function()
+            return current:GetAttribute("Tug")
+        end)
+        if ok and value ~= nil then
+            return value
         end
-
-        task.wait(0.1)
+        current = current.Parent
     end
-
     return nil
 end
 
-local function isTugging(value)
+local function tugIsActive(value)
     if value == true then
         return true
     end
-
-    if typeof(value) == "number" and value > 0 then
+    if type(value) == "number" and value > 0 then
         return true
     end
-
+    if type(value) == "string" then
+        local lower = string.lower(value)
+        return lower == "true" or lower == "tug" or lower == "bite"
+    end
     return false
 end
 
--- Proses auto fishing
-local function fishingLoop()
-    while running do
-        status.Text = "Status: Casting..."
-        click()
-
-        status.Text = "Status: Searching Bobber..."
-
-        local bobber = waitForBobber()
-
-        if not running then break end
-
-        if not bobber then
-            status.Text = "Status: Bobber not found"
-            task.wait(0.5)
-            continue
-        end
-
-        status.Text = "Status: Bobber detected!"
-
-        local reeled = false
-        local connections = {}
-
-        local function watchTug(obj)
-            local function checkTug()
-                if not running or reeled then return end
-
-                local value = obj:GetAttribute("Tug")
-
-                if isTugging(value) then
-                    reeled = true
-                    status.Text = "Status: TUG! REELING!"
-                    click()
-                end
-            end
-
-            table.insert(connections,
-                obj:GetAttributeChangedSignal("Tug"):Connect(checkTug)
-            )
-
-            checkTug()
-        end
-
-        -- Pantau Bobber dan objek turunannya
-        watchTug(bobber)
-
-        for _, obj in ipairs(bobber:GetDescendants()) do
-            if obj:GetAttribute("Tug") ~= nil then
-                watchTug(obj)
-            end
-        end
-
-        -- Tunggu Bobber hilang atau proses dihentikan
-        while running and bobber.Parent and not reeled do
-            task.wait(0.05)
-        end
-
-        -- Tunggu Bobber hilang setelah reel
-        while running and bobber.Parent do
-            task.wait(0.1)
-        end
-
-        for _, connection in ipairs(connections) do
-            connection:Disconnect()
-        end
-
-        if running then
-            status.Text = "Status: Next Fishing..."
-            task.wait(0.3)
-        end
+local function setStatus(label, message)
+    if label and label.Parent then
+        label.Text = "Status: " .. message
     end
-
-    status.Text = "Status: OFF"
 end
 
-startButton.MouseButton1Click:Connect(function()
-    if running then return end
+local function makeGui()
+    local parent
+    if type(gethui) == "function" then
+        local ok, result = pcall(gethui)
+        if ok then parent = result end
+    end
+    parent = parent or game:GetService("CoreGui")
 
-    running = true
-    status.Text = "Status: Starting..."
+    local screen = Instance.new("ScreenGui")
+    screen.Name = "IslandRebornAutoFish"
+    screen.ResetOnSpawn = false
+    screen.Parent = parent
 
-    task.spawn(fishingLoop)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.fromOffset(220, 125)
+    frame.Position = UDim2.new(0.5, -110, 0.5, -62)
+    frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    frame.BorderSizePixel = 0
+    frame.Parent = screen
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 30)
+    title.BackgroundTransparency = 1
+    title.Text = "ISLAND REBORN - AUTO FISH"
+    title.TextColor3 = Color3.new(1, 1, 1)
+    title.TextSize = 13
+    title.Font = Enum.Font.GothamBold
+    title.Parent = frame
+
+    local status = Instance.new("TextLabel")
+    status.Position = UDim2.fromOffset(8, 34)
+    status.Size = UDim2.new(1, -16, 0, 25)
+    status.BackgroundTransparency = 1
+    status.Text = "Status: Idle"
+    status.TextColor3 = Color3.fromRGB(220, 220, 220)
+    status.TextSize = 12
+    status.Font = Enum.Font.Gotham
+    status.Parent = frame
+
+    local startButton = Instance.new("TextButton")
+    startButton.Position = UDim2.fromOffset(10, 68)
+    startButton.Size = UDim2.fromOffset(95, 35)
+    startButton.Text = "START"
+    startButton.TextColor3 = Color3.new(1, 1, 1)
+    startButton.BackgroundColor3 = Color3.fromRGB(35, 145, 75)
+    startButton.Font = Enum.Font.GothamBold
+    startButton.TextSize = 13
+    startButton.Parent = frame
+
+    local stopButton = Instance.new("TextButton")
+    stopButton.Position = UDim2.fromOffset(115, 68)
+    stopButton.Size = UDim2.fromOffset(95, 35)
+    stopButton.Text = "STOP"
+    stopButton.TextColor3 = Color3.new(1, 1, 1)
+    stopButton.BackgroundColor3 = Color3.fromRGB(170, 55, 55)
+    stopButton.Font = Enum.Font.GothamBold
+    stopButton.TextSize = 13
+    stopButton.Parent = frame
+
+    startButton.MouseButton1Click:Connect(function()
+        running = true
+        setStatus(status, "Starting...")
+    end)
+
+    stopButton.MouseButton1Click:Connect(function()
+        running = false
+        setStatus(status, "Stopped")
+    end)
+
+    gui = screen
+    return status
+end
+
+local statusLabel = makeGui()
+
+task.spawn(function()
+    while true do
+        if not running then
+            task.wait(0.2)
+        else
+            setStatus(statusLabel, "Looking for bobber...")
+
+            local bobber = findBobber()
+            local startedAt = os.clock()
+
+            while running and not bobber and os.clock() - startedAt < 20 do
+                task.wait(0.08)
+                bobber = findBobber()
+            end
+
+            if not running then
+                continue
+            end
+
+            if not bobber then
+                setStatus(statusLabel, "Bobber not found - retrying")
+                task.wait(0.5)
+                continue
+            end
+
+            setStatus(statusLabel, "Waiting for fish...")
+            local reeled = false
+            local watchStarted = os.clock()
+
+            while running and bobber.Parent and os.clock() - watchStarted < 90 do
+                local tugValue = getTugValue(bobber)
+
+                if tugIsActive(tugValue) then
+                    setStatus(statusLabel, "Tug detected! Reeling...")
+                    click()
+                    reeled = true
+                    break
+                end
+
+                -- Check all descendants too, in case Tug is stored on a child.
+                for _, child in ipairs(bobber:GetDescendants()) do
+                    if tugIsActive(getTugValue(child)) then
+                        setStatus(statusLabel, "Tug detected! Reeling...")
+                        click()
+                        reeled = true
+                        break
+                    end
+                end
+
+                if reeled then break end
+                task.wait(0.03)
+            end
+
+            if not running then
+                continue
+            end
+
+            if not reeled then
+                setStatus(statusLabel, "No tug detected - checking again")
+            else
+                setStatus(statusLabel, "Reeled in - waiting...")
+            end
+
+            local waitStarted = os.clock()
+            while running and bobber.Parent and os.clock() - waitStarted < 8 do
+                task.wait(0.08)
+            end
+
+            if running then
+                task.wait(0.2)
+                setStatus(statusLabel, "Ready for next cast")
+            end
+        end
+    end
 end)
 
-stopButton.MouseButton1Click:Connect(function()
-    running = false
-    status.Text = "Status: STOPPED"
-end)
+print("[AutoFish] Loaded. Press START in the GUI.")
