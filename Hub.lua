@@ -1,6 +1,6 @@
--- ISLAND HUB - ISLAND REBORN (v7)
--- Satu menu bertab: MANCING | NAMBANG | LOG.
--- Gabungan dari Script (mancing v6.1), Miner (nambang v1.1), dan Logger (v2).
+-- ISLAND HUB - ISLAND REBORN (v8)
+-- Satu menu bertab: MANCING | NAMBANG | SLIME | LOG.
+-- Gabungan dari Script (mancing v6.1), Miner (nambang v1.1), Logger (v2), plus farm slime.
 -- Satu mesin klik (tombol MODE / TES KLIK) dan satu pemantau event dipakai bareng.
 -- Cuma satu auto yang jalan sekali waktu: START di satu tab menghentikan yang lain.
 --
@@ -57,6 +57,25 @@ local MINE = {
     },
 }
 
+local SLIME = {
+    attackDistance = 10,      -- jarak serang (stud). Dari log lu, pukulan kena di sekitar 13 stud
+    searchRadius = 120,       -- slime yang lebih jauh dari ini diabaikan
+    walkTimeout = 10,         -- batas waktu jalan ke satu slime
+    attackInterval = 0.7,     -- jeda antar serangan (detik)
+    attackJitter = 0.25,      -- tambahan acak 0..ini supaya ritmenya tidak kaku
+    noHitSeconds = 8,         -- tidak ada damage segini detik = ganti target
+    targetTimeout = 40,       -- batas waktu melawan satu slime
+    blacklistTime = 40,       -- target bermasalah dilewati selama ini
+    afterKillDelay = { 0.5, 1.2 }, -- jeda acak setelah slime mati
+    minHpPercent = 35,        -- berhenti otomatis kalau HP lu di bawah ini
+    faceTarget = true,        -- hadapkan karakter ke slime (hanya memutar, tidak pindah tempat)
+    folderName = "Entities",  -- Workspace.Entities
+    targets = {
+        { label = "pink", words = { "slimepink" } },
+        { label = "semua", words = { "slime" } },
+    },
+}
+
 local LOGC = {
     ignore = { "QuestsUpdate" },  -- event berisik yang tidak dicatat (cocok sebagian nama)
     maxLines = 1000,
@@ -64,7 +83,7 @@ local LOGC = {
     maxItems = 14,
     scanRadius = 80,
     scanMax = 60,
-    scanWords = { "ore", "rock", "stone", "mine", "crop", "plant", "farm", "wheat", "seed", "tree", "node", "resource" },
+    scanWords = { "ore", "rock", "stone", "mine", "crop", "plant", "farm", "wheat", "seed", "tree", "node", "resource", "slime", "mob", "enemy" },
 }
 
 local GRAY = Color3.fromRGB(150, 150, 150)
@@ -171,7 +190,7 @@ local function makeButton(parent, text, x, y, w, h, color)
     return b
 end
 
-local title = makeLabel(frame, "ISLAND HUB v7", 8, 2, 180, HEADER_H - 4, 15, Color3.new(1, 1, 1))
+local title = makeLabel(frame, "ISLAND HUB v8", 8, 2, 180, HEADER_H - 4, 15, Color3.new(1, 1, 1))
 title.Font = Enum.Font.GothamBold
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Active = true
@@ -185,10 +204,12 @@ body.Size = UDim2.fromOffset(FRAME_W, FRAME_H - HEADER_H)
 body.Parent = frame
 
 local tabButtons, pages = {}, {}
-local TAB_DEFS = { { "fish", "MANCING" }, { "mine", "NAMBANG" }, { "log", "LOG" } }
+local TAB_DEFS = { { "fish", "MANCING" }, { "mine", "NAMBANG" }, { "slime", "SLIME" }, { "log", "LOG" } }
 
 for i, def in ipairs(TAB_DEFS) do
-    tabButtons[def[1]] = makeButton(body, def[2], 6 + (i - 1) * 74, 4, 70, 26, Color3.fromRGB(45, 45, 55))
+    local tb = makeButton(body, def[2], 6 + (i - 1) * 55, 4, 52, 26, Color3.fromRGB(45, 45, 55))
+    tb.TextSize = 10
+    tabButtons[def[1]] = tb
 
     local p = Instance.new("Frame")
     p.BackgroundTransparency = 1
@@ -888,6 +909,261 @@ do
 end
 
 -- =====================================================================
+-- TAB SLIME (farm musuh, jalan biasa tanpa teleport)
+-- =====================================================================
+do
+    local page = pages.slime
+    local status = makeLabel(page, "Status: OFF", 0, 0, 218, 24, 12)
+    local stats = makeLabel(page, "kill: 0 | hit: 0 | dmg: 0", 0, 26, 218, 18, 12, Color3.fromRGB(150, 220, 150))
+    local info = makeLabel(page, "HP: - | target: -", 0, 46, 218, 18, 11, GRAY)
+    local startB = makeButton(page, "START", 0, 70, 104, 34, GREEN)
+    local stopB = makeButton(page, "STOP", 114, 70, 104, 34, RED)
+    local targetB = makeButton(page, "TARGET: pink", 0, 110, 218, 28, Color3.fromRGB(90, 70, 110))
+    makeLabel(page, "Pegang senjata. Jalan biasa, tanpa teleport. Berhenti otomatis kalau HP rendah.", 0, 142, 218, 28, 10, GRAY)
+
+    statusLabels.slime = status
+
+    local targetIdx = 1
+    local kills, hits, totalDamage = 0, 0, 0
+    local targetHits = 0
+    local lastHitAt = os.clock()
+    local currentTarget = nil
+    local blacklist = {}
+
+    local function refreshStats()
+        stats.Text = string.format("kill: %d | hit: %d | dmg: %d", kills, hits, math.floor(totalDamage))
+    end
+
+    -- Event damage dari server: {entity = <slime>, damage = 15, ...}
+    H.damage = function(entity, dmg)
+        if entity ~= currentTarget then return end
+        hits += 1
+        targetHits += 1
+        totalDamage += dmg
+        lastHitAt = os.clock()
+        refreshStats()
+    end
+
+    local function getRoot()
+        local char = player.Character
+        return char and char:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function getHum()
+        local char = player.Character
+        return char and char:FindFirstChildOfClass("Humanoid")
+    end
+
+    local function entityPos(e)
+        if e:IsA("BasePart") then
+            return e.Position
+        end
+
+        local ok, p = pcall(function()
+            return e:GetPivot().Position
+        end)
+        if ok then
+            return p
+        end
+        return nil
+    end
+
+    local function entityAlive(e)
+        if not e or not e.Parent then return false end
+
+        local hum = e:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health <= 0 then
+            return false
+        end
+
+        local h = e:GetAttribute("Health")
+        if typeof(h) == "number" and h <= 0 then
+            return false
+        end
+
+        return true
+    end
+
+    local function nameMatches(name)
+        local n = name:lower()
+        for _, w in ipairs(SLIME.targets[targetIdx].words) do
+            if n:find(w, 1, true) then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function findTarget()
+        local root = getRoot()
+        local folder = workspace:FindFirstChild(SLIME.folderName)
+        if not root or not folder then return nil end
+
+        local best, bestDist
+        for _, e in ipairs(folder:GetChildren()) do
+            local banned = blacklist[e]
+            if banned and os.clock() > banned then
+                blacklist[e] = nil
+                banned = nil
+            end
+
+            if not banned and nameMatches(e.Name) and entityAlive(e) then
+                local pos = entityPos(e)
+                if pos then
+                    local d = (pos - root.Position).Magnitude
+                    if d <= SLIME.searchRadius and (not bestDist or d < bestDist) then
+                        best, bestDist = e, d
+                    end
+                end
+            end
+        end
+
+        return best
+    end
+
+    local function aimAt(pos)
+        local cam = workspace.CurrentCamera
+        if cam and pos then
+            local v, onScreen = cam:WorldToViewportPoint(pos)
+            if onScreen then
+                return Vector2.new(v.X, v.Y)
+            end
+        end
+        return nil
+    end
+
+    -- Hanya memutar badan, posisi tidak berubah
+    local function face(pos)
+        local root = getRoot()
+        if not root then return end
+        root.CFrame = CFrame.lookAt(root.Position, Vector3.new(pos.X, root.Position.Y, pos.Z))
+    end
+
+    -- Jalan biasa ke slime (Humanoid:MoveTo), tidak ada teleport
+    local function approach(id, t)
+        local started = os.clock()
+
+        while isActive(id) and entityAlive(t) and os.clock() - started < SLIME.walkTimeout do
+            local root, hum, pos = getRoot(), getHum(), entityPos(t)
+
+            if not root or not hum or not pos then
+                task.wait(0.5)
+                return false
+            end
+
+            if (root.Position - pos).Magnitude <= SLIME.attackDistance then
+                return true
+            end
+
+            hum:MoveTo(pos)
+            task.wait(0.25)
+        end
+
+        local root, pos = getRoot(), entityPos(t)
+        return root ~= nil and pos ~= nil and entityAlive(t)
+            and (root.Position - pos).Magnitude <= SLIME.attackDistance
+    end
+
+    local function fight(id, t)
+        local started = os.clock()
+        currentTarget = t
+        targetHits = 0
+        lastHitAt = os.clock()
+
+        while isActive(id) and entityAlive(t) and os.clock() - started < SLIME.targetTimeout do
+            local root, hum, pos = getRoot(), getHum(), entityPos(t)
+            if not root or not hum or not pos then break end
+
+            local d = (root.Position - pos).Magnitude
+
+            if d > SLIME.attackDistance then
+                hum:MoveTo(pos) -- slime bergeser, dekati lagi dengan jalan biasa
+                task.wait(0.2)
+            else
+                if SLIME.faceTarget then
+                    face(pos)
+                end
+
+                click(aimAt(pos))
+
+                -- jeda acak supaya ritme serangan tidak seperti robot
+                local gap = SLIME.attackInterval + math.random() * SLIME.attackJitter
+                local t0 = os.clock()
+                while isActive(id) and entityAlive(t) and os.clock() - t0 < gap do
+                    task.wait(0.05)
+                end
+            end
+
+            if os.clock() - lastHitAt > SLIME.noHitSeconds then
+                say("slime", id, "tidak ada damage, ganti target")
+                blacklist[t] = os.clock() + SLIME.blacklistTime
+                break
+            end
+        end
+
+        currentTarget = nil
+
+        if not entityAlive(t) and targetHits > 0 then
+            kills += 1
+            refreshStats()
+        end
+
+        local lo, hi = SLIME.afterKillDelay[1], SLIME.afterKillDelay[2]
+        task.wait(lo + math.random() * (hi - lo))
+    end
+
+    local function slimeLoop(myRun)
+        while isActive(myRun) do
+            local hum = getHum()
+            local pct = 100
+            if hum and hum.MaxHealth > 0 then
+                pct = hum.Health / hum.MaxHealth * 100
+            end
+
+            if pct < SLIME.minHpPercent then
+                stopAll()
+                status.Text = string.format("Status: HP %d%%, berhenti demi aman", math.floor(pct))
+                return
+            end
+
+            local t = findTarget()
+            if not t then
+                info.Text = string.format("HP: %d%% | target: -", math.floor(pct))
+                say("slime", myRun, "tidak ada slime " .. SLIME.targets[targetIdx].label .. ", tunggu...")
+                task.wait(2)
+                continue
+            end
+
+            info.Text = string.format("HP: %d%% | target: %s", math.floor(pct), t.Name)
+            say("slime", myRun, "menuju " .. t.Name)
+
+            if approach(myRun, t) then
+                say("slime", myRun, "menyerang " .. t.Name)
+                fight(myRun, t)
+            else
+                if isActive(myRun) then
+                    blacklist[t] = os.clock() + SLIME.blacklistTime
+                end
+                task.wait(0.3)
+            end
+        end
+
+        currentTarget = nil
+    end
+
+    startB.MouseButton1Click:Connect(function()
+        startTask("slime", slimeLoop)
+    end)
+    stopB.MouseButton1Click:Connect(stopAll)
+
+    targetB.MouseButton1Click:Connect(function()
+        targetIdx = targetIdx % #SLIME.targets + 1
+        blacklist = {}
+        targetB.Text = "TARGET: " .. SLIME.targets[targetIdx].label
+    end)
+end
+
+-- =====================================================================
 -- TAB LOG
 -- =====================================================================
 do
@@ -1211,6 +1487,11 @@ local function dispatch(r, ...)
     if type(data.Title) == "string" and data.Text == "backpack" then
         H.item(data.Title)
     end
+
+    -- event damage ke musuh: {entity = <model>, damage = angka, ...}
+    if typeof(data.entity) == "Instance" and type(data.damage) == "number" then
+        H.damage(data.entity, data.damage)
+    end
 end
 
 local hooked = {}
@@ -1297,4 +1578,4 @@ table.insert(uiConnections, player.Idled:Connect(function()
     end)
 end))
 
--- ===== AKHIR ISLAND HUB v7 (kalau baris ini tidak ada di akhir file, filenya kepotong) =====
+-- ===== AKHIR ISLAND HUB v8 (kalau baris ini tidak ada di akhir file, filenya kepotong) =====
