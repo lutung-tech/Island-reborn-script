@@ -61,6 +61,10 @@ local SLIME = {
     attackDistance = 10,      -- jarak serang (stud). Dari log lu, pukulan kena di sekitar 13 stud
     searchRadius = 120,       -- slime yang lebih jauh dari ini diabaikan
     walkTimeout = 10,         -- batas waktu jalan ke satu slime
+    -- Animasi ayunan diatur game dan tidak bisa dipercepat script. Dengan fastTap, script ngetuk
+    -- sering supaya ayunan berikutnya mulai begitu sudah siap (ketukan saat cooldown diabaikan game).
+    fastTap = true,
+    tapInterval = 0.45,
     probeInterval = 1.0,      -- sebelum jeda ayunan terukur: ketuk tiap ini (ketukan saat cooldown diabaikan game)
     swingJitter = 0.3,        -- tambahan acak 0..ini di atas jeda ayunan supaya ritmenya tidak kaku
     minCooldown = 0.8,        -- jarak antar damage di luar rentang ini tidak dipakai buat mengukur
@@ -76,7 +80,10 @@ local SLIME = {
     faceTarget = true,        -- hadapkan karakter ke slime (hanya memutar, tidak pindah tempat)
     folderName = "Entities",  -- Workspace.Entities
     targets = {
+        -- "biasa" = semua slime KECUALI pink dan biru (jadi slime hijau, apa pun nama pastinya)
+        { label = "biasa", words = { "slime" }, exclude = { "pink", "blue" } },
         { label = "pink", words = { "slimepink" } },
+        { label = "biru", words = { "slimeblue" } },
         { label = "semua", words = { "slime" } },
     },
 }
@@ -923,7 +930,7 @@ do
     local info = makeLabel(page, "HP: - | target: -", 0, 46, 218, 18, 11, GRAY)
     local startB = makeButton(page, "START", 0, 70, 104, 34, GREEN)
     local stopB = makeButton(page, "STOP", 114, 70, 104, 34, RED)
-    local targetB = makeButton(page, "TARGET: pink", 0, 110, 218, 28, Color3.fromRGB(90, 70, 110))
+    local targetB = makeButton(page, "TARGET: biasa", 0, 110, 218, 28, Color3.fromRGB(90, 70, 110))
     makeLabel(page, "Pegang senjata. Jalan biasa, tanpa teleport. Berhenti otomatis kalau HP rendah.", 0, 142, 218, 28, 10, GRAY)
 
     statusLabels.slime = status
@@ -1016,12 +1023,63 @@ do
 
     local function nameMatches(name)
         local n = name:lower()
-        for _, w in ipairs(SLIME.targets[targetIdx].words) do
+        local tgt = SLIME.targets[targetIdx]
+
+        for _, w in ipairs(tgt.exclude or {}) do
+            if n:find(w, 1, true) then
+                return false
+            end
+        end
+
+        for _, w in ipairs(tgt.words) do
             if n:find(w, 1, true) then
                 return true
             end
         end
         return false
+    end
+
+    -- Semua musuh di Workspace.Entities (satu tingkat sub-folder ikut dihitung)
+    local candCache, candCacheAt = {}, 0
+
+    local function candidates(folder)
+        if os.clock() - candCacheAt > 1.5 then
+            candCacheAt = os.clock()
+            candCache = {}
+
+            for _, c in ipairs(folder:GetChildren()) do
+                if c:IsA("Folder") then
+                    for _, c2 in ipairs(c:GetChildren()) do
+                        candCache[#candCache + 1] = c2
+                    end
+                else
+                    candCache[#candCache + 1] = c
+                end
+            end
+        end
+
+        return candCache
+    end
+
+    -- Ringkasan nama musuh yang ada, supaya kelihatan kalau nama slime hijau beda dari tebakan
+    local function describeEntities(folder)
+        local counts, order = {}, {}
+
+        for _, e in ipairs(candidates(folder)) do
+            if e.Parent then
+                if not counts[e.Name] then
+                    counts[e.Name] = 0
+                    order[#order + 1] = e.Name
+                end
+                counts[e.Name] += 1
+            end
+        end
+
+        local parts = {}
+        for i = 1, math.min(#order, 4) do
+            parts[i] = order[i] .. "x" .. counts[order[i]]
+        end
+        return table.concat(parts, ", ")
     end
 
     local function findTarget()
@@ -1030,7 +1088,7 @@ do
         if not root or not folder then return nil end
 
         local best, bestDist
-        for _, e in ipairs(folder:GetChildren()) do
+        for _, e in ipairs(candidates(folder)) do
             local banned = blacklist[e]
             if banned and os.clock() > banned then
                 blacklist[e] = nil
@@ -1179,7 +1237,12 @@ do
                 -- Belum terukur: ketuk tiap probeInterval (ketukan saat cooldown diabaikan game),
                 -- supaya jarak antar damage nyata bisa diukur. Sudah terukur: ketuk tiap swingCd
                 -- ditambah sedikit acak, jadi tidak ada ketukan yang terbuang.
-                local gap = (swingCd or SLIME.probeInterval) + math.random() * SLIME.swingJitter
+                local gap
+                if SLIME.fastTap then
+                    gap = SLIME.tapInterval + math.random() * SLIME.swingJitter * 0.5
+                else
+                    gap = (swingCd or SLIME.probeInterval) + math.random() * SLIME.swingJitter
+                end
                 local t0 = os.clock()
                 while isActive(id) and entityAlive(t) and os.clock() - t0 < gap do
                     task.wait(0.05)
@@ -1220,7 +1283,12 @@ do
 
             local t = findTarget()
             if not t then
-                info.Text = string.format("HP: %d%% | target: -", math.floor(pct))
+                local folder = workspace:FindFirstChild(SLIME.folderName)
+                if folder then
+                    info.Text = "ada: " .. describeEntities(folder)
+                else
+                    info.Text = "folder " .. SLIME.folderName .. " tidak ketemu"
+                end
                 say("slime", myRun, "tidak ada slime " .. SLIME.targets[targetIdx].label .. ", tunggu...")
                 task.wait(2)
                 continue
