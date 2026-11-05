@@ -61,8 +61,13 @@ local SLIME = {
     attackDistance = 10,      -- jarak serang (stud). Dari log lu, pukulan kena di sekitar 13 stud
     searchRadius = 120,       -- slime yang lebih jauh dari ini diabaikan
     walkTimeout = 10,         -- batas waktu jalan ke satu slime
-    attackInterval = 0.7,     -- jeda antar serangan (detik)
-    attackJitter = 0.25,      -- tambahan acak 0..ini supaya ritmenya tidak kaku
+    probeInterval = 1.0,      -- sebelum jeda ayunan terukur: ketuk tiap ini (ketukan saat cooldown diabaikan game)
+    swingJitter = 0.3,        -- tambahan acak 0..ini di atas jeda ayunan supaya ritmenya tidak kaku
+    minCooldown = 0.8,        -- jarak antar damage di luar rentang ini tidak dipakai buat mengukur
+    maxCooldown = 8,
+    healItem = "",            -- nama item penyembuh di tas/hotbar (cocok sebagian nama). Kosong = tidak dipakai
+    healBelowPercent = 55,    -- pakai item penyembuh kalau HP di bawah ini
+    healCooldown = 4,         -- jeda minimal antar pemakaian item penyembuh
     noHitSeconds = 8,         -- tidak ada damage segini detik = ganti target
     targetTimeout = 40,       -- batas waktu melawan satu slime
     blacklistTime = 40,       -- target bermasalah dilewati selama ini
@@ -930,6 +935,12 @@ do
     local currentTarget = nil
     local blacklist = {}
 
+    -- Jeda ayunan diukur dari jarak antar damage nyata (animasi pedang lambat, beberapa detik)
+    local swingCd = nil      -- nil = belum diukur
+    local gapSamples = {}
+    local prevHitAt = nil
+    local lastHealAt = 0
+
     local function refreshStats()
         stats.Text = string.format("kill: %d | hit: %d | dmg: %d", kills, hits, math.floor(totalDamage))
     end
@@ -937,10 +948,29 @@ do
     -- Event damage dari server: {entity = <slime>, damage = 15, ...}
     H.damage = function(entity, dmg)
         if entity ~= currentTarget then return end
+
+        local now = os.clock()
+        if prevHitAt then
+            local gap = now - prevHitAt
+            if gap >= SLIME.minCooldown and gap <= SLIME.maxCooldown then
+                if swingCd == nil then
+                    gapSamples[#gapSamples + 1] = gap
+                    if #gapSamples >= 3 then
+                        table.sort(gapSamples)
+                        swingCd = gapSamples[math.ceil(#gapSamples / 2)] -- median
+                    end
+                elseif gap > swingCd * 1.6 then
+                    swingCd = nil -- jeda berubah (senjata/buff lain), ukur ulang
+                    gapSamples = {}
+                end
+            end
+        end
+        prevHitAt = now
+
         hits += 1
         targetHits += 1
         totalDamage += dmg
-        lastHitAt = os.clock()
+        lastHitAt = now
         refreshStats()
     end
 
@@ -1064,15 +1094,75 @@ do
             and (root.Position - pos).Magnitude <= SLIME.attackDistance
     end
 
+    local function findToolByName(part)
+        part = part:lower()
+
+        local char = player.Character
+        local bp = player:FindFirstChildOfClass("Backpack")
+
+        for _, holder in ipairs({ char, bp }) do
+            if holder then
+                for _, t in ipairs(holder:GetChildren()) do
+                    if t:IsA("Tool") and t.Name:lower():find(part, 1, true) then
+                        return t
+                    end
+                end
+            end
+        end
+
+        return nil
+    end
+
+    -- Pakai item penyembuh (kalau SLIME.healItem diisi), lalu pegang senjata lagi
+    local function maybeHeal(id, hum)
+        if SLIME.healItem == "" or hum.MaxHealth <= 0 then return end
+        if hum.Health / hum.MaxHealth * 100 >= SLIME.healBelowPercent then return end
+        if os.clock() - lastHealAt < SLIME.healCooldown then return end
+        lastHealAt = os.clock()
+
+        local item = findToolByName(SLIME.healItem)
+        if not item then
+            say("slime", id, "item penyembuh '" .. SLIME.healItem .. "' tidak ketemu")
+            return
+        end
+
+        local char = player.Character
+        local weapon = char and char:FindFirstChildOfClass("Tool")
+
+        say("slime", id, "pakai " .. item.Name)
+        hum:EquipTool(item)
+        task.wait(0.4)
+        click()
+        task.wait(1.0)
+
+        if weapon and weapon ~= item and weapon.Parent then
+            hum:EquipTool(weapon)
+            task.wait(0.3)
+        end
+    end
+
     local function fight(id, t)
         local started = os.clock()
         currentTarget = t
         targetHits = 0
+        prevHitAt = nil
         lastHitAt = os.clock()
 
         while isActive(id) and entityAlive(t) and os.clock() - started < SLIME.targetTimeout do
             local root, hum, pos = getRoot(), getHum(), entityPos(t)
             if not root or not hum or not pos then break end
+
+            maybeHeal(id, hum)
+
+            if hum.MaxHealth > 0 then
+                local pct = hum.Health / hum.MaxHealth * 100
+                local cdText = swingCd and string.format("%.1fs", swingCd) or "ukur..."
+                info.Text = string.format("HP: %d%% | cd: %s | %s", math.floor(pct), cdText, t.Name)
+
+                if pct < SLIME.minHpPercent then
+                    break -- HP terlalu rendah, slimeLoop yang menghentikan
+                end
+            end
 
             local d = (root.Position - pos).Magnitude
 
@@ -1086,8 +1176,10 @@ do
 
                 click(aimAt(pos))
 
-                -- jeda acak supaya ritme serangan tidak seperti robot
-                local gap = SLIME.attackInterval + math.random() * SLIME.attackJitter
+                -- Belum terukur: ketuk tiap probeInterval (ketukan saat cooldown diabaikan game),
+                -- supaya jarak antar damage nyata bisa diukur. Sudah terukur: ketuk tiap swingCd
+                -- ditambah sedikit acak, jadi tidak ada ketukan yang terbuang.
+                local gap = (swingCd or SLIME.probeInterval) + math.random() * SLIME.swingJitter
                 local t0 = os.clock()
                 while isActive(id) and entityAlive(t) and os.clock() - t0 < gap do
                     task.wait(0.05)
